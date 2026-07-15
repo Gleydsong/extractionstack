@@ -3,24 +3,24 @@ import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module.js';
-import { assertSafeRuntimeEnv } from './common/env-guard.js';
 import { HttpExceptionFilter } from './common/http-exception.filter.js';
+import { loadRuntimeEnv } from './common/runtime-env.js';
 
 async function bootstrap(): Promise<void> {
-  assertSafeRuntimeEnv();
+  const env = loadRuntimeEnv(process.env);
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app.enableShutdownHooks();
 
   app.use(helmet());
   app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(',') ?? ['http://localhost:5173'],
+    origin: env.CORS_ORIGIN.split(',').map((origin) => origin.trim()),
     credentials: true,
   });
 
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  const port = Number(process.env.API_PORT ?? 3001);
-  await app.listen(port);
-  Logger.log(`API listening on :${port}`, 'Bootstrap');
+  await app.listen(env.API_PORT);
+  Logger.log(`API listening on :${env.API_PORT}`, 'Bootstrap');
 }
 
 void bootstrap();

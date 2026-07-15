@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Evidence } from './common.js';
+import { EvidenceSchema, type Evidence } from './common.js';
 
 export const DimensionSchema = z.enum([
   'cssFramework',
@@ -39,8 +39,9 @@ export const ExtractRequestSchema = z.object({
   url: z
     .string()
     .url({ message: 'must be a valid http(s) URL' })
+    .max(2048)
     .refine((u) => /^https?:\/\//i.test(u), 'only http(s) URLs are allowed'),
-});
+}).strict();
 export type ExtractRequest = z.infer<typeof ExtractRequestSchema>;
 
 export const NetworkEntrySchema = z.object({
@@ -123,13 +124,30 @@ export const CrawledPageSchema = z.object({
 });
 export type CrawledPage = z.infer<typeof CrawledPageSchema>;
 
-export const DetectorResultSchema = z.object({
-  dimension: DimensionSchema,
-  status: z.enum(['ok', 'skipped', 'error']),
-  data: z.unknown().optional(),
-  reason: z.string().optional(),
-  error: z.string().optional(),
-});
+export const DetectorResultSchema = z.discriminatedUnion('status', [
+  z
+    .object({
+      dimension: DimensionSchema,
+      status: z.literal('ok'),
+      data: z.unknown(),
+      evidence: z.array(EvidenceSchema).max(100).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      dimension: DimensionSchema,
+      status: z.literal('skipped'),
+      reason: z.string().max(512),
+    })
+    .strict(),
+  z
+    .object({
+      dimension: DimensionSchema,
+      status: z.literal('error'),
+      error: z.string().max(512),
+    })
+    .strict(),
+]);
 
 export type DetectorResult<T = unknown> =
   | { dimension: Dimension; status: 'ok'; data: T; evidence?: Evidence[] }

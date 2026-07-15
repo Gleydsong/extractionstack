@@ -19,6 +19,14 @@ describe('ExtractRequestSchema', () => {
     const r = ExtractRequestSchema.safeParse({ url: 'ftp://example.com' });
     expect(r.success).toBe(false);
   });
+  it('rejects unknown fields and oversized URLs', () => {
+    expect(
+      ExtractRequestSchema.safeParse({ url: 'https://example.com', role: 'admin' }).success,
+    ).toBe(false);
+    expect(
+      ExtractRequestSchema.safeParse({ url: `https://example.com/${'x'.repeat(2049)}` }).success,
+    ).toBe(false);
+  });
 });
 
 describe('ErrorResponseSchema', () => {
@@ -29,6 +37,15 @@ describe('ErrorResponseSchema', () => {
       targetUrl: 'https://example.com',
     });
     expect(r.success).toBe(true);
+  });
+  it('accepts operational security error codes', () => {
+    expect(
+      ErrorResponseSchema.safeParse({
+        code: 'URL_NOT_ALLOWED',
+        message: 'target rejected',
+        requestId: 'cb6d0478-a915-4d09-bde4-b6270d677e6a',
+      }).success,
+    ).toBe(true);
   });
 });
 

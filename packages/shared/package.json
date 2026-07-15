@@ -17,12 +17,13 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint \"src/**/*.ts\"",
-    "test": "echo 'no tests in shared'"
+    "test": "vitest run"
   },
   "dependencies": {
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.1"
   }
 }

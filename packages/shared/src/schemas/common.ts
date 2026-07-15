@@ -33,15 +33,21 @@ export const ErrorResponseSchema = z.object({
     'CRAWLER_TIMEOUT',
     'CRAWLER_TARGET',
     'RATE_LIMITED',
+    'CONFLICT',
+    'PAYLOAD_TOO_LARGE',
+    'URL_NOT_ALLOWED',
+    'QUEUE_UNAVAILABLE',
     'INTERNAL',
+    'CRAWLER_LIMIT',
   ]),
   message: z.string(),
+  requestId: z.string().uuid().optional(),
   hint: z.string().optional(),
   fields: z
     .array(z.object({ path: z.string(), message: z.string() }))
     .optional(),
   targetStatus: z.number().int().optional(),
   targetUrl: z.string().url().optional(),
-});
+}).strict();
 
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
