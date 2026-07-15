@@ -1,0 +1,16 @@
+node_modules
+dist
+build
+.turbo
+.pnpm-store
+*.log
+.env
+.env.local
+.env.*.local
+coverage
+.DS_Store
+playwright-report
+test-results
+prisma/migrations/**/migration_lock.toml
+!.env.example
+apps/api/prisma/.env

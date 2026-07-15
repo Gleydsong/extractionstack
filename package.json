@@ -1,0 +1,28 @@
+{
+  "name": "extractionstack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Analyze a live URL and produce a structured tech-stack report.",
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel --filter=@extractionstack/api --filter=@extractionstack/web run dev",
+    "dev:api": "pnpm --filter @extractionstack/api run dev",
+    "dev:web": "pnpm --filter @extractionstack/web run dev",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm -r test:e2e",
+    "prisma:generate": "pnpm --filter @extractionstack/api run prisma:generate",
+    "prisma:migrate": "pnpm --filter @extractionstack/api run prisma:migrate",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.0"
+  }
+}

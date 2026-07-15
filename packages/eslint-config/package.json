@@ -1,0 +1,12 @@
+{
+  "name": "@extractionstack/eslint-config",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "lint": "echo 'lint config'",
+    "typecheck": "echo 'no typecheck for config'",
+    "test": "echo 'no tests'"
+  }
+}
