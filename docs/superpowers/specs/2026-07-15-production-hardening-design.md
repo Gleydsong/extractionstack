@@ -1,7 +1,7 @@
 # ExtractionStack Production Hardening Design
 
 **Date:** 2026-07-15
-**Status:** Proposed; architecture approved, written specification awaiting review
+**Status:** Approved for implementation
 **Scope:** One extensive delivery covering application stability, asynchronous extraction, persistence, security, testing, observability, and local deployment
 
 ## 1. Objective
