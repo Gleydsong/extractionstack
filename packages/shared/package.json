@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "lint": "echo 'lint shared'",
+    "lint": "eslint \"src/**/*.ts\"",
     "test": "echo 'no tests in shared'"
   },
   "dependencies": {

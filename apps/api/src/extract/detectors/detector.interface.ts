@@ -1,4 +1,4 @@
-import { CrawledPage, DetectorResult, Dimension, Evidence } from '@extractionstack/shared';
+import type { CrawledPage, DetectorResult, Dimension, Evidence } from '@extractionstack/shared';
 
 export interface Detector<TData = unknown> {
   readonly dimension: Dimension;

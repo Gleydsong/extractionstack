@@ -12,6 +12,7 @@ function page(html: string, overrides: Partial<CrawledPage> = {}): CrawledPage {
     headers: {},
     responseHeaders: {},
     networkLog: [],
+    cookies: [],
     meta: { title: 'T', description: 'D' },
     scripts: [],
     stylesheets: [],

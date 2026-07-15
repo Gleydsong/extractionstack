@@ -1,5 +1,5 @@
-import { Provider } from '@nestjs/common';
-import { Detector } from './detector.interface.js';
+import type { Provider } from '@nestjs/common';
+import type { Detector } from './detector.interface.js';
 import { CssFrameworkDetector } from './css-framework.detector.js';
 import { CssCustomizationDetector } from './css-customization.detector.js';
 import { DesignSystemDetector } from './design-system.detector.js';

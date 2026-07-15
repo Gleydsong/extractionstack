@@ -1,11 +1,13 @@
+import type {
+  PropsWithChildren,
+  ReactElement} from 'react';
 import {
   createContext,
-  PropsWithChildren,
-  ReactElement,
   useContext,
   useMemo,
 } from 'react';
-import { Auth0Provider, useAuth0, Auth0ContextInterface } from '@auth0/auth0-react';
+import type { Auth0ContextInterface } from '@auth0/auth0-react';
+import { Auth0Provider, useAuth0 } from '@auth0/auth0-react';
 
 export interface AppAuth {
   isAuthenticated: boolean;

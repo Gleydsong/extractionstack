@@ -1,4 +1,4 @@
-import { DetectorResult, Evidence } from '@extractionstack/shared';
+import type { DetectorResult, Evidence } from '@extractionstack/shared';
 
 interface Props {
   section: DetectorResult;
@@ -15,6 +15,10 @@ function confidenceColor(c: Evidence['confidence']): string {
     case 'low':
       return 'var(--muted)';
   }
+}
+
+function terminalMessage(section: Exclude<DetectorResult, { status: 'ok' }>): string {
+  return section.status === 'skipped' ? section.reason : section.error;
 }
 
 export function ReportSection({ section, isOpen, onToggle }: Props): JSX.Element {
@@ -76,7 +80,7 @@ export function ReportSection({ section, isOpen, onToggle }: Props): JSX.Element
               ) : null}
             </>
           ) : (
-            <pre>{JSON.stringify(section.reason ?? section.error, null, 2)}</pre>
+            <pre>{JSON.stringify(terminalMessage(section), null, 2)}</pre>
           )}
         </>
       ) : null}

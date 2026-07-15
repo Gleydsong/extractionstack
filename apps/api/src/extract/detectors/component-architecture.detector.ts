@@ -1,4 +1,4 @@
-import { CrawledPage } from '@extractionstack/shared';
+import type { CrawledPage } from '@extractionstack/shared';
 import { BaseDetector } from './detector.interface.js';
 
 interface ComponentArchitectureData {

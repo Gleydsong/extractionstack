@@ -1,13 +1,14 @@
-import {
+import type {
   ArgumentsHost,
+  ExceptionFilter} from '@nestjs/common';
+import {
   Catch,
-  ExceptionFilter,
   HttpException,
   HttpStatus,
   Logger,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
-import { ErrorResponse } from '@extractionstack/shared';
+import type { Request, Response } from 'express';
+import type { ErrorResponse } from '@extractionstack/shared';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {

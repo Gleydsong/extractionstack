@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExtractRequestSchema, ExtractionReport } from '@extractionstack/shared';
+import { ExtractRequestSchema } from '@extractionstack/shared';
 import { useExtract } from './useExtract';
 import { UrlForm } from './UrlForm';
 import { ReportView } from './ReportView';

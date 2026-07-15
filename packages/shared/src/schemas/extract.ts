@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { EvidenceSchema, type Evidence } from './common.js';
+import type { Evidence } from './common.js';
 
 export const DimensionSchema = z.enum([
   'cssFramework',

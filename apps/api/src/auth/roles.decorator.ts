@@ -1,5 +1,5 @@
 import { SetMetadata } from '@nestjs/common';
-import { UserRole } from '@extractionstack/shared';
+import type { UserRole } from '@extractionstack/shared';
 
 export const ROLES_KEY = 'extractionstack.roles';
 export const Roles = (...roles: UserRole[]): MethodDecorator & ClassDecorator =>

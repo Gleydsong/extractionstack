@@ -10,5 +10,7 @@ module.exports = {
   rules: {
     ...require('./index.js').rules,
     'react/prop-types': 'off',
+    'react/react-in-jsx-scope': 'off',
+    'react/jsx-uses-react': 'off',
   },
 };

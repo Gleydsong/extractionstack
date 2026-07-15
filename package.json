@@ -16,12 +16,18 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:e2e": "pnpm -r test:e2e",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "prisma:generate": "pnpm --filter @extractionstack/api run prisma:generate",
     "prisma:migrate": "pnpm --filter @extractionstack/api run prisma:migrate",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.35.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
     "prettier": "^3.2.5",
     "typescript": "^5.4.0"
   }

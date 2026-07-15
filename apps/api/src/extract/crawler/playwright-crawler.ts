@@ -1,6 +1,8 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { Browser, chromium, Response } from 'playwright';
-import { Cookie, CrawledPage, NetworkEntry } from '@extractionstack/shared';
+import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import type { Browser, Response } from 'playwright';
+import { chromium } from 'playwright';
+import type { Cookie, CrawledPage, NetworkEntry } from '@extractionstack/shared';
 import { assertSafeTargetUrl } from '../../common/url-safety.js';
 
 interface InternalNetworkEntry extends NetworkEntry {

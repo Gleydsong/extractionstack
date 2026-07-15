@@ -1,4 +1,4 @@
-import { PropsWithChildren } from 'react';
+import type { PropsWithChildren } from 'react';
 import { useAppAuth } from './WebAuthProvider';
 
 export function RequireAuth({ children }: PropsWithChildren): JSX.Element {

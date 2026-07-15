@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { passportJwtSecret } from 'jwks-rsa';
-import { Auth0User } from '@extractionstack/shared';
+import type { Auth0User } from '@extractionstack/shared';
 
 interface Auth0Payload {
   sub: string;

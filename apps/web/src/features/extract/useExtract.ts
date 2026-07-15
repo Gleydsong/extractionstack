@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ErrorResponseSchema, ExtractRequest, ExtractionReport } from '@extractionstack/shared';
+import type { ExtractRequest, ExtractionReport } from '@extractionstack/shared';
+import { ErrorResponseSchema } from '@extractionstack/shared';
 import { useAppAuth } from '../auth/WebAuthProvider';
 
 interface State {

@@ -1,5 +1,5 @@
-import { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector, evHigh, evMed } from './detector.interface.js';
+import type { CrawledPage } from '@extractionstack/shared';
+import { BaseDetector, evHigh } from './detector.interface.js';
 
 interface ReverseProxyData {
   detected: string[];

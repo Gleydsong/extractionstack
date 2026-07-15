@@ -1,5 +1,5 @@
-import { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector, evHigh, evMed, evLow } from './detector.interface.js';
+import type { CrawledPage } from '@extractionstack/shared';
+import { BaseDetector, evHigh, evMed } from './detector.interface.js';
 
 interface DockerKubernetesData {
   docker: string[];

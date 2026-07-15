@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import {
+import type {
   CrawledPage,
   DetectorResult,
   Dimension,
@@ -8,9 +8,9 @@ import {
 } from '@extractionstack/shared';
 import { mapExtractError } from '../common/extract-errors.js';
 import { assertSafeTargetUrl } from '../common/url-safety.js';
-import { Detector } from './detectors/detector.interface.js';
+import type { Detector } from './detectors/detector.interface.js';
 import { DETECTOR_LIST, DETECTORS_TOKEN, RESPONSIVE_GRID_MERGE_KEY } from './detectors/registry.js';
-import { PlaywrightCrawler } from './crawler/playwright-crawler.js';
+import type { PlaywrightCrawler } from './crawler/playwright-crawler.js';
 
 @Injectable()
 export class ExtractService {

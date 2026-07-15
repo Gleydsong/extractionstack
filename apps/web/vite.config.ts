@@ -4,6 +4,11 @@ import path from 'node:path';
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      '@extractionstack/shared': path.resolve(__dirname, '../../packages/shared/src/index.ts'),
+    },
+  },
   server: {
     host: true,
     port: 5173,

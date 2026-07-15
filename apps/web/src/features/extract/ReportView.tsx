@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DetectorResult, ExtractionReport } from '@extractionstack/shared';
+import type { DetectorResult, ExtractionReport } from '@extractionstack/shared';
 import { ReportSection } from './ReportSection';
 
 interface ReportViewProps {
