@@ -8,7 +8,11 @@
     "noEmit": true,
     "allowImportingTsExtensions": false,
     "useDefineForClassFields": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@extractionstack/shared": ["../../packages/shared/src/index.ts"]
+    }
   },
   "include": ["src", "vite.config.ts", "vitest.config.ts"]
 }

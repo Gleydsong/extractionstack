@@ -1,13 +1,18 @@
-import { Module, Global } from '@nestjs/common';
+import { Module, Global, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+
+@Injectable()
+export class PrismaService extends PrismaClient implements OnModuleDestroy {
+  async onModuleDestroy(): Promise<void> {
+    await this.$disconnect();
+  }
+}
 
 @Global()
 @Module({
   providers: [
-    {
-      provide: PrismaClient,
-      useFactory: (): PrismaClient => new PrismaClient(),
-    },
+    PrismaService,
+    { provide: PrismaClient, useExisting: PrismaService },
   ],
   exports: [PrismaClient],
 })

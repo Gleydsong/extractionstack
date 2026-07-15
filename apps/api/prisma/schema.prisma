@@ -12,7 +12,76 @@ model User {
   auth0Sub  String   @unique
   email     String?  @unique
   name      String?
-  role      String   @default("user")
+  role      UserRole @default(USER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  jobs      ExtractionJob[]
+  auditEvents AuditEvent[]
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum ExtractionStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCEL_REQUESTED
+  CANCELLED
+}
+
+model ExtractionJob {
+  id             String           @id @default(cuid())
+  ownerId        String
+  owner          User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  requestedUrl   String           @db.VarChar(2048)
+  normalizedUrl  String           @db.VarChar(2048)
+  idempotencyKey String           @db.VarChar(128)
+  status         ExtractionStatus @default(QUEUED)
+  attempts       Int              @default(0)
+  maxAttempts    Int              @default(3)
+  errorCode      String?          @db.VarChar(64)
+  errorMessage   String?          @db.VarChar(512)
+  queuedAt       DateTime         @default(now())
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  report         ExtractionReport?
+
+  @@unique([ownerId, idempotencyKey])
+  @@index([ownerId, createdAt])
+  @@index([status])
+}
+
+model ExtractionReport {
+  id            String        @id @default(cuid())
+  jobId         String        @unique
+  job           ExtractionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  schemaVersion Int           @default(1)
+  finalUrl      String        @db.VarChar(2048)
+  fetchedAt     DateTime
+  durationMs    Int
+  payload       Json
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  actorId    String
+  actor      User     @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  action     String   @db.VarChar(64)
+  entityType String   @db.VarChar(64)
+  entityId   String   @db.VarChar(64)
+  requestId  String?  @db.VarChar(64)
+  ipHash     String?  @db.VarChar(128)
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
 }

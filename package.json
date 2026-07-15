@@ -13,7 +13,7 @@
     "dev:api": "pnpm --filter @extractionstack/api run dev",
     "dev:web": "pnpm --filter @extractionstack/web run dev",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm --filter @extractionstack/shared build && pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:e2e": "pnpm -r test:e2e",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",

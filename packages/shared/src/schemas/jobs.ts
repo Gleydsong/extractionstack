@@ -17,6 +17,12 @@ export const IdempotencyKeySchema = z
   .max(128)
   .regex(/^[A-Za-z0-9._:-]+$/, 'invalid idempotency key');
 
+export const ExtractionIdSchema = z
+  .string()
+  .min(10)
+  .max(64)
+  .regex(/^c[a-z0-9]+$/i, 'invalid extraction id');
+
 export const CreateExtractionSchema = z
   .object({
     url: z
@@ -30,7 +36,7 @@ export type CreateExtraction = z.infer<typeof CreateExtractionSchema>;
 
 export const ExtractionJobSchema = z
   .object({
-    id: z.string().min(10).max(64),
+    id: ExtractionIdSchema,
     requestedUrl: z.string().url().max(2048),
     normalizedUrl: z.string().url().max(2048),
     status: ExtractionStatusSchema,
