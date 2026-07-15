@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface CssFrameworkData {
   detected: string[];
@@ -29,6 +29,9 @@ export class CssFrameworkDetector extends BaseDetector<CssFrameworkData> {
       return this.ok({ detected: [], primary: null, evidence: {} });
     }
     const detected = Object.keys(evidence).sort((a, b) => (evidence[b] ?? 0) - (evidence[a] ?? 0));
-    return this.ok({ detected, primary: detected[0] ?? null, evidence });
+    return this.ok(
+      { detected, primary: detected[0] ?? null, evidence },
+      detected.map((name) => evMed('html', `${name} class signature`, `${evidence[name]} match(es)`)),
+    );
   }
 }

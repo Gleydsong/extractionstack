@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface DesignTokensData {
   customProperties: { name: string; value: string }[];
@@ -30,7 +30,10 @@ export class DesignTokensDetector extends BaseDetector<DesignTokensData> {
       groups[prefix] = (groups[prefix] ?? 0) + 1;
     }
 
-    return this.ok({ customProperties: props, namingConvention: naming, groups });
+    return this.ok(
+      { customProperties: props, namingConvention: naming, groups },
+      props.slice(0, 10).map((property) => evMed('html', `${property.name}: ${property.value}`)),
+    );
   }
 
   private detectNaming(names: string[]): DesignTokensData['namingConvention'] {

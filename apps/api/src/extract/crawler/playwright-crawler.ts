@@ -27,10 +27,30 @@ export class PlaywrightCrawler implements OnModuleInit, OnModuleDestroy {
   async crawl(targetUrl: string): Promise<CrawledPage> {
     if (!this.browser) throw new Error('crawler not initialized');
     const timeoutMs = Number(process.env.CRAWLER_TIMEOUT_MS ?? 25_000);
+    const limits: CrawlLimits = {
+      maxHtmlBytes: Number(process.env.CRAWLER_MAX_HTML_BYTES ?? 5 * 1024 * 1024),
+      maxResponses: Number(process.env.CRAWLER_MAX_RESPONSES ?? 1_000),
+      maxRedirects: Number(process.env.CRAWLER_MAX_REDIRECTS ?? 5),
+    };
 
     const context = await this.browser.newContext({
       ignoreHTTPSErrors: false,
       bypassCSP: true,
+    });
+    let blockedRequestError: Error | null = null;
+    await context.route('**/*', async (route) => {
+      const requestUrl = route.request().url();
+      if (!/^https?:/i.test(requestUrl)) {
+        await route.continue();
+        return;
+      }
+      try {
+        await assertSafeTargetUrl(requestUrl);
+        await route.continue();
+      } catch (error) {
+        blockedRequestError = error as Error;
+        await route.abort('blockedbyclient');
+      }
     });
     const page = await context.newPage();
 
@@ -57,6 +77,7 @@ export class PlaywrightCrawler implements OnModuleInit, OnModuleDestroy {
         waitUntil: 'networkidle',
         timeout: timeoutMs,
       });
+      if (blockedRequestError) throw blockedRequestError;
       const status = resp?.status() ?? 0;
       if (status >= 400) {
         throw new CrawlerTargetError(targetUrl, status);
@@ -64,6 +85,15 @@ export class PlaywrightCrawler implements OnModuleInit, OnModuleDestroy {
       const finalUrl = page.url();
       await assertSafeTargetUrl(finalUrl);
       const html = await page.content();
+      const redirectCount = countRedirects(resp?.request());
+      assertCrawlLimits(
+        {
+          htmlBytes: Buffer.byteLength(html, 'utf8'),
+          responseCount: net.length,
+          redirectCount,
+        },
+        limits,
+      );
       const headers = resp ? resp.headers() : {};
       const meta = await this.collectMeta(page);
       const { scripts, stylesheets, linkRel } = await this.collectAssets(page);
@@ -208,6 +238,41 @@ export class PlaywrightCrawler implements OnModuleInit, OnModuleDestroy {
       };
     });
   }
+}
+
+export interface CrawlUsage {
+  htmlBytes: number;
+  responseCount: number;
+  redirectCount: number;
+}
+
+export interface CrawlLimits {
+  maxHtmlBytes: number;
+  maxResponses: number;
+  maxRedirects: number;
+}
+
+export class CrawlerLimitError extends Error {
+  constructor(public readonly limit: keyof CrawlLimits) {
+    super(`crawler resource limit exceeded: ${limit}`);
+    this.name = 'CrawlerLimitError';
+  }
+}
+
+export function assertCrawlLimits(usage: CrawlUsage, limits: CrawlLimits): void {
+  if (usage.htmlBytes > limits.maxHtmlBytes) throw new CrawlerLimitError('maxHtmlBytes');
+  if (usage.responseCount > limits.maxResponses) throw new CrawlerLimitError('maxResponses');
+  if (usage.redirectCount > limits.maxRedirects) throw new CrawlerLimitError('maxRedirects');
+}
+
+function countRedirects(request: import('playwright').Request | undefined): number {
+  let count = 0;
+  let current = request?.redirectedFrom() ?? null;
+  while (current) {
+    count += 1;
+    current = current.redirectedFrom();
+  }
+  return count;
 }
 
 export class CrawlerTimeoutError extends Error {

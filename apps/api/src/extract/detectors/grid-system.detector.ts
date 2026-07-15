@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface GridSystemData {
   displayFlexCount: number;
@@ -19,6 +19,9 @@ export class GridSystemDetector extends BaseDetector<GridSystemData> {
     const displayGridCount = (page.html.match(/display\s*:\s*grid/g) ?? []).length + (grid ? 1 : 0);
     const inlineStyleFlex = (page.html.match(/style="[^"]*display\s*:\s*flex/gi) ?? []).length;
     const inlineStyleGrid = (page.html.match(/style="[^"]*display\s*:\s*grid/gi) ?? []).length;
-    return this.ok({ displayFlexCount, displayGridCount, inlineStyleFlex, inlineStyleGrid });
+    const evidence = [];
+    if (displayFlexCount > 0) evidence.push(evMed('computedStyle', `display:flex x${displayFlexCount}`));
+    if (displayGridCount > 0) evidence.push(evMed('html', `display:grid x${displayGridCount}`));
+    return this.ok({ displayFlexCount, displayGridCount, inlineStyleFlex, inlineStyleGrid }, evidence);
   }
 }

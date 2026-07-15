@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface ScrollAnimationData {
   libs: string[];
@@ -24,6 +24,9 @@ export class ScrollAnimationDetector extends BaseDetector<ScrollAnimationData> {
     const hasIntersectionObserver =
       /IntersectionObserver/.test(page.html) ||
       page.scripts.some((s) => (s.content ?? '').includes('IntersectionObserver'));
-    return this.ok({ libs, hasDataScroll, hasIntersectionObserver });
+    const evidence = libs.map((name) => evMed('html', name, 'scroll animation marker'));
+    if (hasDataScroll) evidence.push(evMed('html', 'data-scroll attribute'));
+    if (hasIntersectionObserver) evidence.push(evMed('script', 'IntersectionObserver'));
+    return this.ok({ libs, hasDataScroll, hasIntersectionObserver }, evidence);
   }
 }

@@ -41,6 +41,7 @@ export class ArchitectureDetector extends BaseDetector<ArchitectureData> {
     }
     if (rendering === 'unknown' && (page.meta.htmlLang || page.meta.title)) {
       rendering = 'mpa';
+      evidence.push(evMed('meta', 'document metadata present', 'MPA fallback inference'));
     }
 
     const graphqlCalls = page.networkLog.filter((n) => /\/graphql(\?|$|#)|\/gql(\?|$|#)/.test(n.url)).length;
@@ -51,6 +52,8 @@ export class ArchitectureDetector extends BaseDetector<ArchitectureData> {
     if (graphqlCalls > 0 && restCalls > 0) apiStyle = 'mixed';
     else if (graphqlCalls > 0) apiStyle = 'graphql';
     else if (restCalls > 0) apiStyle = 'rest';
+    if (graphqlCalls > 0) evidence.push(evHigh('network', `${graphqlCalls} GraphQL call(s)`));
+    if (restCalls > 0) evidence.push(evMed('network', `${restCalls} REST-like call(s)`));
 
     const distinctHosts = new Set(page.networkLog.map((n) => safeHost(n.url)).filter((h): h is string => !!h));
     let monolith: ArchitectureData['monolith'] = 'unknown';

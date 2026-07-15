@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface CssCustomizationData {
   customProperties: string[];
@@ -33,10 +33,13 @@ export class CssCustomizationDetector extends BaseDetector<CssCustomizationData>
     const serializedMatches = page.html.match(/<style[^>]*>[\s\S]*?--[\w-]+[\s\S]*?<\/style>/g) ?? [];
     const overrideCount = (page.html.match(/:root\s*{/g) ?? []).length;
 
-    return this.ok({
-      customProperties,
-      cssInJs: { runtime, serialized: serializedMatches.length },
-      overrideCount,
-    });
+    const evidence = [
+      ...customProperties.slice(0, 5).map((name) => evMed('html', name, 'CSS custom property')),
+      ...runtime.map((name) => evMed('html', name, 'CSS-in-JS runtime marker')),
+    ];
+    return this.ok(
+      { customProperties, cssInJs: { runtime, serialized: serializedMatches.length }, overrideCount },
+      evidence,
+    );
   }
 }

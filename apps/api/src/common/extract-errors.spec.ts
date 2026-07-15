@@ -5,10 +5,19 @@ import { mapExtractError } from './extract-errors.js';
 import { UrlNotAllowedError } from './url-safety.js';
 
 describe('mapExtractError', () => {
-  it('maps blocked URLs to 400 VALIDATION', () => {
-    expect(() =>
-      mapExtractError(new UrlNotAllowedError('http://127.0.0.1', 'private or reserved IP')),
-    ).toThrow(BadRequestException);
+  it('maps blocked URLs to a sanitized 400 URL_NOT_ALLOWED', () => {
+    try {
+      mapExtractError(
+        new UrlNotAllowedError('http://169.254.169.254/latest', 'metadata IP detected'),
+      );
+      throw new Error('expected mapExtractError to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toEqual({
+        code: 'URL_NOT_ALLOWED',
+        message: 'target URL is not allowed',
+      });
+    }
   });
 
   it('maps crawler timeout to 504', () => {

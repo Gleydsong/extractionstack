@@ -3,16 +3,18 @@ import {
   BadRequestException,
   GatewayTimeoutException,
 } from '@nestjs/common';
-import { CrawlerTargetError, CrawlerTimeoutError } from '../extract/crawler/playwright-crawler.js';
+import {
+  CrawlerLimitError,
+  CrawlerTargetError,
+  CrawlerTimeoutError,
+} from '../extract/crawler/playwright-crawler.js';
 import { UrlNotAllowedError } from './url-safety.js';
 
 export function mapExtractError(err: unknown): never {
   if (err instanceof UrlNotAllowedError) {
     throw new BadRequestException({
-      code: 'VALIDATION',
+      code: 'URL_NOT_ALLOWED',
       message: 'target URL is not allowed',
-      hint: err.reason,
-      targetUrl: err.targetUrl,
     });
   }
   if (err instanceof CrawlerTimeoutError) {
@@ -28,6 +30,12 @@ export function mapExtractError(err: unknown): never {
       message: `target returned HTTP ${err.targetStatus}`,
       targetStatus: err.targetStatus,
       targetUrl: err.targetUrl,
+    });
+  }
+  if (err instanceof CrawlerLimitError) {
+    throw new BadGatewayException({
+      code: 'CRAWLER_LIMIT',
+      message: 'target exceeded crawler safety limits',
     });
   }
   throw err;

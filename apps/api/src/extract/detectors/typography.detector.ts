@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface TypographyData {
   families: string[];
@@ -39,6 +39,10 @@ export class TypographyDetector extends BaseDetector<TypographyData> {
       .filter((x): x is NonNullable<typeof x> => Boolean(x))
       .map((x) => ({ selector: x.selector, size: x.styles['font-size'] ?? '' }));
 
-    return this.ok({ families, weights, baseSize, scale });
+    const evidence = families
+      .slice(0, 5)
+      .map((family) => evMed('computedStyle', `font-family: ${family}`));
+    if (baseSize) evidence.push(evMed('computedStyle', `body font-size: ${baseSize}`));
+    return this.ok({ families, weights, baseSize, scale }, evidence);
   }
 }

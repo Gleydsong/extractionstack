@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface ComponentArchitectureData {
   framework: string | null;
@@ -88,6 +88,7 @@ export class ComponentArchitectureDetector extends BaseDetector<ComponentArchite
         : 'spa'
       : 'unknown';
 
-    return this.ok({ framework, versionHints, hydration, markers });
+    const evidence = markers.map((marker) => evMed('html', marker, 'component framework marker'));
+    return this.ok({ framework, versionHints, hydration, markers }, evidence);
   }
 }

@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface PaletteData {
   backgroundColors: string[];
@@ -29,11 +29,13 @@ export class PaletteDetector extends BaseDetector<PaletteData> {
     for (const m of page.html.matchAll(/border(?:-[a-z]+)?\s*:\s*[^;]*?(#[\w()]+|rgba?\([^)]+\))/gi)) {
       if (m[1]) borders.add(normalizeColor(m[1]));
     }
-    return this.ok({
-      backgroundColors: Array.from(backgrounds).slice(0, 30),
-      textColors: Array.from(colors).slice(0, 30),
-      borderColors: Array.from(borders).slice(0, 30),
-      sample,
-    });
+    const backgroundColors = Array.from(backgrounds).slice(0, 30);
+    const textColors = Array.from(colors).slice(0, 30);
+    const borderColors = Array.from(borders).slice(0, 30);
+    const evidence = [
+      ...backgroundColors.slice(0, 5).map((color) => evMed('computedStyle', `background-color: ${color}`)),
+      ...textColors.slice(0, 5).map((color) => evMed('computedStyle', `color: ${color}`)),
+    ];
+    return this.ok({ backgroundColors, textColors, borderColors, sample }, evidence);
   }
 }

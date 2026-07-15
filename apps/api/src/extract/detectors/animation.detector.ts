@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface AnimationData {
   keyframes: number;
@@ -24,6 +24,10 @@ export class AnimationDetector extends BaseDetector<AnimationData> {
     const cssTransitions = (page.html.match(/transition\s*:/g) ?? []).length;
     const cssAnimations = (page.html.match(/animation\s*:/g) ?? []).length;
     const libs = LIB_SIGNATURES.filter((s) => s.pattern.test(page.html)).map((s) => s.name);
-    return this.ok({ keyframes, cssTransitions, cssAnimations, libs });
+    const evidence = [];
+    if (keyframes > 0) evidence.push(evMed('html', `@keyframes x${keyframes}`));
+    if (cssTransitions > 0) evidence.push(evMed('html', `transition declarations x${cssTransitions}`));
+    evidence.push(...libs.map((name) => evMed('script', name, 'animation library marker')));
+    return this.ok({ keyframes, cssTransitions, cssAnimations, libs }, evidence);
   }
 }

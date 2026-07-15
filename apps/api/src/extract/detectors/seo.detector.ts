@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface SeoData {
   title: string | null;
@@ -33,16 +33,25 @@ export class SeoDetector extends BaseDetector<SeoData> {
       (n) => n.url.endsWith('/robots.txt') && (n.status ?? 0) < 400,
     );
     const jsonLd = (html.match(/application\/ld\+json/g) ?? []).length;
-    return this.ok({
-      title: page.meta.title ?? null,
-      description: page.meta.description ?? null,
-      canonical: page.meta.canonical ?? null,
-      robots: page.meta.robots ?? null,
-      openGraph,
-      twitter,
-      hasSitemap,
-      hasRobotsTxt,
-      jsonLd,
-    });
+    const evidence = [];
+    if (page.meta.title) evidence.push(evMed('meta', `title: ${page.meta.title}`));
+    if (page.meta.description) evidence.push(evMed('meta', `description: ${page.meta.description}`));
+    for (const [name, value] of Object.entries(openGraph).slice(0, 5)) {
+      evidence.push(evMed('meta', `${name}: ${value}`));
+    }
+    return this.ok(
+      {
+        title: page.meta.title ?? null,
+        description: page.meta.description ?? null,
+        canonical: page.meta.canonical ?? null,
+        robots: page.meta.robots ?? null,
+        openGraph,
+        twitter,
+        hasSitemap,
+        hasRobotsTxt,
+        jsonLd,
+      },
+      evidence,
+    );
   }
 }

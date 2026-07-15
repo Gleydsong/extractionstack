@@ -8,7 +8,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import type { ErrorResponse } from '@extractionstack/shared';
+import { ErrorResponseSchema, type ErrorResponse } from '@extractionstack/shared';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -27,10 +27,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       return;
     }
 
-    this.logger.error(
-      `unhandled error on ${req.method} ${req.url}: ${(exception as Error)?.message}`,
-      (exception as Error)?.stack,
-    );
+    this.logger.error(`unhandled error on ${req.method} ${req.url}`, {
+      errorType: exception instanceof Error ? exception.name : 'UnknownError',
+    });
     const body: ErrorResponse = {
       code: 'INTERNAL',
       message: 'unexpected error',
@@ -39,17 +38,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
   }
 
   private fromHttpException(body: unknown, status: number): ErrorResponse {
-    if (typeof body === 'object' && body !== null && 'code' in body) {
-      return body as ErrorResponse;
-    }
-    const message =
-      typeof body === 'object' && body !== null && 'message' in body
-        ? String((body as { message: unknown }).message)
-        : typeof body === 'string'
-          ? body
-          : 'request failed';
+    const parsed = ErrorResponseSchema.safeParse(body);
+    if (parsed.success) return parsed.data;
     const code = this.codeForStatus(status);
-    return { code, message };
+    return { code, message: 'request failed' };
   }
 
   private codeForStatus(status: number): ErrorResponse['code'] {

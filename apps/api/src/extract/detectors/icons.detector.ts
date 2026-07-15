@@ -1,5 +1,5 @@
 import type { CrawledPage } from '@extractionstack/shared';
-import { BaseDetector } from './detector.interface.js';
+import { BaseDetector, evMed } from './detector.interface.js';
 
 interface IconsData {
   inlineSvgCount: number;
@@ -28,6 +28,8 @@ export class IconsDetector extends BaseDetector<IconsData> {
     );
     const faIcons = (page.html.match(/\bfa-[\w-]+/g) ?? []).length;
     const totalIcons = inlineSvgCount + faIcons;
-    return this.ok({ inlineSvgCount, libraries, totalIcons });
+    const evidence = libraries.map((name) => evMed('html', name, 'icon library marker'));
+    if (inlineSvgCount > 0) evidence.push(evMed('html', `<svg> x${inlineSvgCount}`));
+    return this.ok({ inlineSvgCount, libraries, totalIcons }, evidence);
   }
 }
