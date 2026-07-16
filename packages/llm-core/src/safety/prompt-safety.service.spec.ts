@@ -166,4 +166,31 @@ describe('PromptSafetyService', () => {
     expect(inspection.safeText).toContain('mode=readonly');
     expect(inspection.reasonCodes).toEqual(['SECRET_LIKE_VALUE']);
   });
+
+  it.each([
+    'password=abc/remaining-secret mode=readonly',
+    'Authorization = Bearer abc/remaining-secret mode=readonly',
+    'Authorization = Basic YWxpY2U6c2VjcmV0Lys9PQ== mode=readonly',
+    'password=https://alice:secret@example.test mode=readonly',
+  ])('redacts a complete slash-bearing unquoted credential: %s', (source) => {
+    const inspection = safety.inspect(source);
+
+    expect(inspection.safeText).toContain('mode=readonly');
+    expect(inspection.safeText).not.toMatch(
+      /remaining-secret|alice:secret|YWxpY2U6c2VjcmV0Lys9PQ|password=|Authorization\s*=/i,
+    );
+    expect(inspection.reasonCodes).toEqual(['SECRET_LIKE_VALUE']);
+  });
+
+  it.each([
+    String.raw`curl -H "Authorization: Bearer first\"remaining-secret" https://safe.example --verbose`,
+    String.raw`curl -H 'Cookie: session=first\'remaining-secret' https://safe.example --compressed`,
+  ])('redacts escape-aware quoted curl headers and preserves trailing arguments', (source) => {
+    const inspection = safety.inspect(source);
+
+    expect(inspection.safeText).toContain('https://safe.example');
+    expect(inspection.safeText).toMatch(/--(?:verbose|compressed)/);
+    expect(inspection.safeText).not.toMatch(/first|remaining-secret|session=/i);
+    expect(inspection.reasonCodes).toEqual(['SENSITIVE_HEADER_VALUE']);
+  });
 });

@@ -35,8 +35,8 @@ const SECRET_QUERY_KEYS = new Set([
 ]);
 const SECRET_ASSIGNMENT_START =
   /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|authorization)\b\s*(?:=|:)\s*/gi;
-const QUOTED_SENSITIVE_HEADER =
-  /(['"])((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:)[^\r\n]*?\1/gi;
+const QUOTED_SENSITIVE_HEADER_START =
+  /(['"])((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:)\s*/gi;
 const EMBEDDED_SENSITIVE_HEADER =
   /((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:)(?!\s*\[REDACTED\])\s*[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gi;
 const SOURCE_DELIMITER = /<\/?untrusted_extraction_report\s*>/gi;
@@ -52,6 +52,7 @@ const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 type ParsedAssignmentValue = Readonly<{
   end: number;
   credentialText: string;
+  closed: boolean;
 }>;
 
 export class PromptSafetyService {
@@ -59,13 +60,9 @@ export class PromptSafetyService {
     const reasons: SafetyReasonCode[] = [];
     let safeText = normalizeLineEndings(input);
 
-    safeText = safeText.replace(
-      QUOTED_SENSITIVE_HEADER,
-      (_match, quote: string, header: string) => {
-        addReason(reasons, 'SENSITIVE_HEADER_VALUE');
-        return `${quote}${header} [REDACTED]${quote}`;
-      },
-    );
+    const quotedHeaders = redactQuotedSensitiveHeaders(safeText);
+    safeText = quotedHeaders.safeText;
+    if (quotedHeaders.modified) addReason(reasons, 'SENSITIVE_HEADER_VALUE');
     safeText = safeText.replace(EMBEDDED_SENSITIVE_HEADER, (_match, header: string) => {
       addReason(reasons, 'SENSITIVE_HEADER_VALUE');
       return `${header} [REDACTED]`;
@@ -197,6 +194,35 @@ function redactSecretAssignments(input: string): { safeText: string; modified: b
   return { safeText: parts.join(''), modified: true };
 }
 
+function redactQuotedSensitiveHeaders(input: string): { safeText: string; modified: boolean } {
+  const matcher = new RegExp(
+    QUOTED_SENSITIVE_HEADER_START.source,
+    QUOTED_SENSITIVE_HEADER_START.flags,
+  );
+  const parts: string[] = [];
+  let cursor = 0;
+  let modified = false;
+  let match: RegExpExecArray | null;
+
+  while ((match = matcher.exec(input)) !== null) {
+    const quoteStart = match.index;
+    const value = scanQuotedValue(input, quoteStart);
+    const quote = match[1] ?? '';
+    const header = match[2] ?? '';
+    parts.push(
+      input.slice(cursor, quoteStart),
+      `${quote}${header} [REDACTED]${value.closed ? quote : ''}`,
+    );
+    cursor = value.end;
+    matcher.lastIndex = value.end;
+    modified = true;
+  }
+
+  if (!modified) return { safeText: input, modified: false };
+  parts.push(input.slice(cursor));
+  return { safeText: parts.join(''), modified: true };
+}
+
 function parseAssignmentValue(
   input: string,
   start: number,
@@ -206,7 +232,7 @@ function parseAssignmentValue(
   const first = input[start];
   if (first !== '"' && first !== "'") {
     let end = start;
-    while (end < input.length && !/[\s&#;,/]/.test(input[end] ?? '')) end += 1;
+    while (end < input.length && !/\s/.test(input[end] ?? '')) end += 1;
     const firstToken = input.slice(start, end);
     if (authorization && /^(?:bearer|basic)$/i.test(firstToken)) {
       let credentialStart = end;
@@ -214,20 +240,25 @@ function parseAssignmentValue(
         credentialStart += 1;
       }
       let credentialEnd = credentialStart;
-      while (credentialEnd < input.length && !/[\s&#;,/]/.test(input[credentialEnd] ?? '')) {
+      while (credentialEnd < input.length && !/\s/.test(input[credentialEnd] ?? '')) {
         credentialEnd += 1;
       }
       if (credentialEnd > credentialStart) {
         return {
           end: credentialEnd,
           credentialText: `${firstToken} ${input.slice(credentialStart, credentialEnd)}`,
+          closed: true,
         };
       }
     }
-    return end > start ? { end, credentialText: input.slice(start, end) } : undefined;
+    return end > start ? { end, credentialText: input.slice(start, end), closed: true } : undefined;
   }
 
-  const quote = first;
+  return scanQuotedValue(input, start);
+}
+
+function scanQuotedValue(input: string, start: number): ParsedAssignmentValue {
+  const quote = input[start] ?? '';
   const lineEndIndex = input.indexOf('\n', start + 1);
   const lineEnd = lineEndIndex === -1 ? input.length : lineEndIndex;
   let escaped = false;
@@ -242,12 +273,14 @@ function parseAssignmentValue(
       return {
         end: index + 1,
         credentialText: unescapeQuoted(input.slice(start + 1, index)),
+        closed: true,
       };
     }
   }
   return {
     end: lineEnd,
     credentialText: unescapeQuoted(input.slice(start + 1, lineEnd)),
+    closed: false,
   };
 }
 
