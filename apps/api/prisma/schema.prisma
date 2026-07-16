@@ -8,15 +8,19 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  auth0Sub  String   @unique
-  email     String?  @unique
-  name      String?
-  role      UserRole @default(USER)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  jobs      ExtractionJob[]
-  auditEvents AuditEvent[]
+  id                   String                @id @default(cuid())
+  auth0Sub             String                @unique
+  email                String?               @unique
+  name                 String?
+  role                 UserRole              @default(USER)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  jobs                 ExtractionJob[]
+  auditEvents          AuditEvent[]
+  aiConnections        AiConnection[]
+  promptProjects       PromptProject[]
+  promptGenerationJobs PromptGenerationJob[]
+  creditLedgerEntries  CreditLedgerEntry[]
 }
 
 enum UserRole {
@@ -34,23 +38,24 @@ enum ExtractionStatus {
 }
 
 model ExtractionJob {
-  id             String           @id @default(cuid())
+  id             String            @id @default(cuid())
   ownerId        String
-  owner          User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  requestedUrl   String           @db.VarChar(2048)
-  normalizedUrl  String           @db.VarChar(2048)
-  idempotencyKey String           @db.VarChar(128)
-  status         ExtractionStatus @default(QUEUED)
-  attempts       Int              @default(0)
-  maxAttempts    Int              @default(3)
-  errorCode      String?          @db.VarChar(64)
-  errorMessage   String?          @db.VarChar(512)
-  queuedAt       DateTime         @default(now())
+  owner          User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  requestedUrl   String            @db.VarChar(2048)
+  normalizedUrl  String            @db.VarChar(2048)
+  idempotencyKey String            @db.VarChar(128)
+  status         ExtractionStatus  @default(QUEUED)
+  attempts       Int               @default(0)
+  maxAttempts    Int               @default(3)
+  errorCode      String?           @db.VarChar(64)
+  errorMessage   String?           @db.VarChar(512)
+  queuedAt       DateTime          @default(now())
   startedAt      DateTime?
   finishedAt     DateTime?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
   report         ExtractionReport?
+  promptProjects PromptProject[]
 
   @@unique([ownerId, idempotencyKey])
   @@index([ownerId, createdAt])
@@ -84,4 +89,282 @@ model AuditEvent {
 
   @@index([actorId, createdAt])
   @@index([entityType, entityId])
+}
+
+enum LlmProvider {
+  FAKE
+  OPENAI
+  GEMINI
+}
+
+enum CredentialMode {
+  OAUTH
+  API_KEY
+  PLATFORM_CREDITS
+}
+
+enum ConnectionState {
+  PENDING
+  ACTIVE
+  EXPIRED
+  REVOKED
+  INVALID
+}
+
+enum PromptProjectState {
+  ACTIVE
+  ARCHIVED
+}
+
+enum PromptVersionKind {
+  UNIVERSAL
+  ADAPTED
+}
+
+enum PromptOperation {
+  GENERATE
+  ADAPT
+  PREVIEW
+}
+
+enum PromptJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCEL_REQUESTED
+  CANCELLED
+}
+
+enum PreviewStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCEL_REQUESTED
+  CANCELLED
+}
+
+enum SecurityAction {
+  ALLOW
+  REDACT
+  BLOCK
+}
+
+enum CreditLedgerKind {
+  GRANT
+  PURCHASE
+  RESERVATION
+  CONFIRMATION
+  REVERSAL
+  ADJUSTMENT
+}
+
+model AiConnection {
+  id               String                @id @default(cuid())
+  ownerId          String
+  owner            User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  provider         LlmProvider
+  displayLabel     String                @db.VarChar(120)
+  credentialMode   CredentialMode
+  state            ConnectionState       @default(PENDING)
+  maskedCredential String?               @db.VarChar(32)
+  scopes           String[]
+  expiresAt        DateTime?
+  validatedAt      DateTime?
+  lastUsedAt       DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  credentials      ProviderCredential[]
+  jobs             PromptGenerationJob[]
+
+  @@unique([ownerId, provider, displayLabel])
+  @@index([ownerId, state])
+  @@index([provider, state])
+}
+
+model ProviderCredential {
+  id                    String       @id @default(cuid())
+  connectionId          String
+  connection            AiConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  version               Int
+  ciphertext            Bytes
+  encryptedDataKey      Bytes
+  algorithm             String       @db.VarChar(32)
+  keyVersion            String       @db.VarChar(64)
+  authenticatedMetadata Json
+  createdAt             DateTime     @default(now())
+  rotatedAt             DateTime?
+  deletedAt             DateTime?
+
+  @@unique([connectionId, version])
+  @@index([connectionId, createdAt])
+}
+
+model PromptProject {
+  id               String                @id @default(cuid())
+  ownerId          String
+  owner            User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  extractionId     String
+  extraction       ExtractionJob         @relation(fields: [extractionId], references: [id], onDelete: Restrict)
+  title            String                @db.VarChar(200)
+  category         String                @db.VarChar(32)
+  language         String                @db.VarChar(16)
+  wizardInput      Json
+  currentVersionId String?
+  currentVersion   PromptVersion?        @relation("CurrentPromptVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  state            PromptProjectState    @default(ACTIVE)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  versions         PromptVersion[]       @relation("ProjectPromptVersions")
+  jobs             PromptGenerationJob[]
+
+  @@index([ownerId, createdAt])
+  @@index([extractionId])
+  @@index([state])
+}
+
+model PromptVersion {
+  id                  String                @id @default(cuid())
+  projectId           String
+  project             PromptProject         @relation("ProjectPromptVersions", fields: [projectId], references: [id], onDelete: Cascade)
+  sequence            Int
+  sourceVersionId     String?
+  sourceVersion       PromptVersion?        @relation("PromptVersionAdaptations", fields: [sourceVersionId], references: [id], onDelete: Restrict)
+  adaptations         PromptVersion[]       @relation("PromptVersionAdaptations")
+  kind                PromptVersionKind
+  destination         String                @db.VarChar(32)
+  content             String                @db.Text
+  metadata            Json
+  contentHash         String                @db.VarChar(64)
+  templateVersion     String                @db.VarChar(32)
+  reportSchemaVersion Int
+  provider            LlmProvider?
+  model               String?               @db.VarChar(128)
+  createdAt           DateTime              @default(now())
+  currentForProjects  PromptProject[]       @relation("CurrentPromptVersion")
+  previews            PromptPreview[]
+  sourceJobs          PromptGenerationJob[] @relation("SourcePromptVersion")
+  resultJobs          PromptGenerationJob[] @relation("ResultPromptVersion")
+
+  @@unique([projectId, sequence])
+  @@index([projectId, createdAt])
+  @@index([sourceVersionId])
+}
+
+model PromptGenerationJob {
+  id                    String              @id @default(cuid())
+  ownerId               String
+  owner                 User                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  projectId             String
+  project               PromptProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  operation             PromptOperation
+  provider              LlmProvider
+  model                 String              @db.VarChar(128)
+  credentialMode        CredentialMode
+  connectionId          String?
+  connection            AiConnection?       @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  idempotencyKey        String              @db.VarChar(160)
+  status                PromptJobStatus     @default(QUEUED)
+  attempts              Int                 @default(0)
+  maxAttempts           Int                 @default(3)
+  sourcePromptVersionId String?
+  sourcePromptVersion   PromptVersion?      @relation("SourcePromptVersion", fields: [sourcePromptVersionId], references: [id], onDelete: Restrict)
+  resultPromptVersionId String?
+  resultPromptVersion   PromptVersion?      @relation("ResultPromptVersion", fields: [resultPromptVersionId], references: [id], onDelete: SetNull)
+  errorCode             String?             @db.VarChar(64)
+  errorMessage          String?             @db.VarChar(1000)
+  retryable             Boolean?
+  queuedAt              DateTime            @default(now())
+  startedAt             DateTime?
+  finishedAt            DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  previews              PromptPreview[]
+  usage                 LlmUsage?
+  securityDecisions     SecurityDecision[]
+  creditLedgerEntries   CreditLedgerEntry[]
+
+  @@unique([ownerId, idempotencyKey])
+  @@index([projectId, createdAt])
+  @@index([ownerId, status])
+  @@index([status, queuedAt])
+  @@index([connectionId])
+  @@index([sourcePromptVersionId])
+  @@index([resultPromptVersionId])
+}
+
+model PromptPreview {
+  id              String              @id @default(cuid())
+  promptVersionId String
+  promptVersion   PromptVersion       @relation(fields: [promptVersionId], references: [id], onDelete: Cascade)
+  jobId           String
+  job             PromptGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status          PreviewStatus       @default(QUEUED)
+  content         String              @db.Text
+  summary         String              @db.VarChar(2000)
+  provider        LlmProvider
+  model           String              @db.VarChar(128)
+  finishReason    String?             @db.VarChar(160)
+  latencyMs       Int?
+  createdAt       DateTime            @default(now())
+  completedAt     DateTime?
+
+  @@unique([jobId])
+  @@index([promptVersionId, createdAt])
+  @@index([status])
+}
+
+model LlmUsage {
+  id                   String              @id @default(cuid())
+  jobId                String              @unique
+  job                  PromptGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  provider             LlmProvider
+  model                String              @db.VarChar(128)
+  credentialMode       CredentialMode
+  inputTokens          Int?
+  outputTokens         Int?
+  cachedTokens         Int?
+  totalTokens          Int?
+  estimatedAmountMinor BigInt?
+  confirmedAmountMinor BigInt?
+  currency             String?             @db.VarChar(8)
+  pricingVersion       String?             @db.VarChar(64)
+  providerRequestId    String?             @db.VarChar(160)
+  createdAt            DateTime            @default(now())
+
+  @@index([provider, createdAt])
+  @@index([providerRequestId])
+}
+
+model SecurityDecision {
+  id            String              @id @default(cuid())
+  jobId         String
+  job           PromptGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  decisionType  String              @db.VarChar(64)
+  action        SecurityAction
+  policyVersion String              @db.VarChar(32)
+  reasonCode    String              @db.VarChar(64)
+  metadata      Json?
+  createdAt     DateTime            @default(now())
+
+  @@index([jobId, createdAt])
+  @@index([action, createdAt])
+}
+
+model CreditLedgerEntry {
+  id             String               @id @default(cuid())
+  ownerId        String
+  owner          User                 @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  jobId          String?
+  job            PromptGenerationJob? @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  kind           CreditLedgerKind
+  amountMinor    BigInt
+  currency       String               @db.VarChar(8)
+  idempotencyKey String               @unique @db.VarChar(160)
+  metadata       Json?
+  createdAt      DateTime             @default(now())
+
+  @@index([ownerId, createdAt])
+  @@index([jobId])
 }
