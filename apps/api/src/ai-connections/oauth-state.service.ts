@@ -39,7 +39,6 @@ export type OAuthStateRecord = Readonly<{
   provider: 'GEMINI';
   redirectUri: string;
   verifier: string;
-  nonce: string;
   expiresAt: number;
   usedAt: number | null;
 }>;
@@ -51,7 +50,13 @@ export interface OAuthStateStorePort {
 
 interface RedisOAuthStateClient {
   connect(): Promise<void>;
-  set(key: string, value: string, mode: 'EX', ttlSeconds: number, condition?: 'NX'): Promise<'OK' | null>;
+  set(
+    key: string,
+    value: string,
+    mode: 'EX',
+    ttlSeconds: number,
+    condition?: 'NX',
+  ): Promise<'OK' | null>;
   getdel(key: string): Promise<string | null>;
   get(key: string): Promise<string | null>;
   del(key: string): Promise<number>;
@@ -71,7 +76,9 @@ export interface IdempotencyStorePort {
     key: string;
     fingerprint: string;
     run: () => Promise<T>;
-    parse: (value: unknown) => T;
+    parse: (value: unknown) => T | Promise<T>;
+    encodeResult?: (value: T) => unknown | Promise<unknown>;
+    cacheRequired?: boolean;
   }): Promise<T>;
 }
 
@@ -85,9 +92,10 @@ export class RedisIdempotencyService implements IdempotencyStorePort {
     key: string;
     fingerprint: string;
     run: () => Promise<T>;
-    parse: (value: unknown) => T;
+    parse: (value: unknown) => T | Promise<T>;
+    encodeResult?: (value: T) => unknown | Promise<unknown>;
+    cacheRequired?: boolean;
   }): Promise<T> {
-    if (this.redis.status === 'wait') await this.redis.connect();
     const redisKey = idempotencyKey(input.ownerSub, input.operation, input.key);
     const leaseToken = randomBytes(32).toString('base64url');
     const pending = JSON.stringify({
@@ -95,23 +103,38 @@ export class RedisIdempotencyService implements IdempotencyStorePort {
       fingerprint: input.fingerprint,
       leaseToken,
     });
-    const acquired = await this.redis.set(
-      redisKey,
-      pending,
-      'EX',
-      IDEMPOTENCY_TTL_SECONDS,
-      'NX',
-    );
+    let acquired: 'OK' | null;
+    try {
+      if (this.redis.status === 'wait') await this.redis.connect();
+      acquired = await this.redis.set(redisKey, pending, 'EX', IDEMPOTENCY_TTL_SECONDS, 'NX');
+    } catch (error) {
+      if (input.cacheRequired) throw error;
+      return input.run();
+    }
     if (acquired !== 'OK') {
-      const existing = parseIdempotencyRecord(await this.redis.get(redisKey));
-      if (!existing || existing.fingerprint !== input.fingerprint) {
+      let existing: ReturnType<typeof parseIdempotencyRecord> = null;
+      try {
+        existing = parseIdempotencyRecord(await this.redis.get(redisKey));
+      } catch (error) {
+        if (input.cacheRequired) throw error;
+        return input.run();
+      }
+      if (existing?.status === 'COMPLETE' && existing.fingerprint === input.fingerprint) {
+        return input.parse(existing.result);
+      }
+      if (input.cacheRequired && (!existing || existing.fingerprint !== input.fingerprint)) {
         throw new ConflictException({
           code: 'CONFLICT',
           message: 'idempotency key was already used for another request',
         });
       }
-      if (existing.status === 'COMPLETE') return input.parse(existing.result);
-      throw new ConflictException({ code: 'CONFLICT', message: 'request is already in progress' });
+      if (input.cacheRequired) {
+        throw new ConflictException({
+          code: 'CONFLICT',
+          message: 'request is already in progress',
+        });
+      }
+      return input.run();
     }
     let result: T;
     try {
@@ -122,20 +145,27 @@ export class RedisIdempotencyService implements IdempotencyStorePort {
         .catch(() => undefined);
       throw error;
     }
+    const storedResult = input.encodeResult ? await input.encodeResult(result) : result;
     const completed = JSON.stringify({
       status: 'COMPLETE',
       fingerprint: input.fingerprint,
-      result,
+      result: storedResult,
     });
-    const stored = await this.redis.eval(
-      COMPLETE_IDEMPOTENCY_SCRIPT,
-      1,
-      redisKey,
-      pending,
-      completed,
-      IDEMPOTENCY_TTL_SECONDS,
-    );
-    if (stored !== 1) {
+    let stored: unknown;
+    try {
+      stored = await this.redis.eval(
+        COMPLETE_IDEMPOTENCY_SCRIPT,
+        1,
+        redisKey,
+        pending,
+        completed,
+        IDEMPOTENCY_TTL_SECONDS,
+      );
+    } catch (error) {
+      if (input.cacheRequired) throw error;
+      return result;
+    }
+    if (stored !== 1 && input.cacheRequired) {
       throw new ConflictException({
         code: 'CONFLICT',
         message: 'idempotency lease was not retained',
@@ -262,14 +292,17 @@ function idempotencyKey(ownerSub: string, operation: string, key: string): strin
   return `${IDEMPOTENCY_PREFIX}${digest}`;
 }
 
-function parseIdempotencyRecord(value: string | null):
+function parseIdempotencyRecord(
+  value: string | null,
+):
   | { status: 'PENDING'; fingerprint: string }
   | { status: 'COMPLETE'; fingerprint: string; result: unknown }
   | null {
   if (!value) return null;
   try {
     const record = JSON.parse(value) as Record<string, unknown>;
-    if (typeof record.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(record.fingerprint)) return null;
+    if (typeof record.fingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(record.fingerprint))
+      return null;
     if (record.status === 'PENDING') return { status: 'PENDING', fingerprint: record.fingerprint };
     if (record.status === 'COMPLETE' && 'result' in record) {
       return { status: 'COMPLETE', fingerprint: record.fingerprint, result: record.result };
@@ -289,15 +322,15 @@ function parseRecord(value: string): OAuthStateRecord | null {
     const record = JSON.parse(value) as Partial<OAuthStateRecord>;
     const keys = Object.keys(record).sort();
     if (
-      JSON.stringify(keys) !== JSON.stringify([
-        'expiresAt',
-        'nonce',
-        'ownerSub',
-        'provider',
-        'redirectUri',
-        'usedAt',
-        'verifier',
-      ]) ||
+      JSON.stringify(keys) !==
+        JSON.stringify([
+          'expiresAt',
+          'ownerSub',
+          'provider',
+          'redirectUri',
+          'usedAt',
+          'verifier',
+        ]) ||
       record.provider !== 'GEMINI' ||
       typeof record.ownerSub !== 'string' ||
       record.ownerSub.length < 1 ||
@@ -305,8 +338,6 @@ function parseRecord(value: string): OAuthStateRecord | null {
       typeof record.redirectUri !== 'string' ||
       typeof record.verifier !== 'string' ||
       !/^[A-Za-z0-9_-]{43}$/.test(record.verifier) ||
-      typeof record.nonce !== 'string' ||
-      !/^[A-Za-z0-9_-]{43}$/.test(record.nonce) ||
       typeof record.expiresAt !== 'number' ||
       !Number.isSafeInteger(record.expiresAt) ||
       record.usedAt !== null

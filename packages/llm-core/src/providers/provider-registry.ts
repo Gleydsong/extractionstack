@@ -45,10 +45,9 @@ const ProviderCapabilitiesSchema = z.discriminatedUnion('provider', [
   z
     .object({
       provider: z.literal('GEMINI'),
-      credentialModes: z.tuple([
-        z.literal('OAUTH'),
-        z.literal('API_KEY'),
-        z.literal('PLATFORM_CREDITS'),
+      credentialModes: z.union([
+        z.tuple([z.literal('API_KEY'), z.literal('PLATFORM_CREDITS')]),
+        z.tuple([z.literal('OAUTH'), z.literal('API_KEY'), z.literal('PLATFORM_CREDITS')]),
       ]),
       ...CapabilityBaseShape,
     })

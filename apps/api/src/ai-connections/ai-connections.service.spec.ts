@@ -35,11 +35,28 @@ function connection(overrides: Partial<StoredAiConnection> = {}): StoredAiConnec
   };
 }
 
+function publicConnection(value: StoredAiConnection) {
+  return {
+    id: value.id,
+    provider: value.provider,
+    displayLabel: value.displayLabel,
+    credentialMode: value.credentialMode,
+    state: value.state,
+    maskedCredential: value.maskedCredential,
+    scopes: [...value.scopes],
+    expiresAt: value.expiresAt?.toISOString() ?? null,
+    validatedAt: value.validatedAt?.toISOString() ?? null,
+    lastUsedAt: value.lastUsedAt?.toISOString() ?? null,
+    createdAt: value.createdAt.toISOString(),
+    updatedAt: value.updatedAt.toISOString(),
+  };
+}
+
 function setup(options: { oauthExpiresAt?: string } = {}) {
   const stored = connection();
   const repository: AiConnectionsRepositoryPort = {
     listOwned: vi.fn().mockResolvedValue([stored]),
-    createApiKey: vi.fn().mockResolvedValue(stored),
+    createApiKey: vi.fn().mockResolvedValue({ result: publicConnection(stored), replayed: false }),
     createOAuth: vi.fn().mockImplementation(async (_actor, input) =>
       connection({
         provider: 'GEMINI',
@@ -50,15 +67,23 @@ function setup(options: { oauthExpiresAt?: string } = {}) {
         expiresAt: input.expiresAt,
       }),
     ),
-    findOwnedCredential: vi.fn().mockImplementation(async (requestedActor, id) =>
-      requestedActor.sub === actor.sub && id === stored.id
-        ? { connection: stored, envelope: null }
-        : null,
-    ),
-    updateValidation: vi.fn().mockResolvedValue(stored),
-    revokeOwned: vi.fn().mockImplementation(async (requestedActor, id) =>
-      requestedActor.sub === actor.sub && id === stored.id ? stored : null,
-    ),
+    findOwnedCredential: vi
+      .fn()
+      .mockImplementation(async (requestedActor, id) =>
+        requestedActor.sub === actor.sub && id === stored.id
+          ? { connection: stored, envelope: null }
+          : null,
+      ),
+    updateValidation: vi
+      .fn()
+      .mockResolvedValue({ result: publicConnection(stored), replayed: false }),
+    revokeOwned: vi
+      .fn()
+      .mockImplementation(async (requestedActor, id) =>
+        requestedActor.sub === actor.sub && id === stored.id
+          ? { result: publicConnection(stored), replayed: false }
+          : null,
+      ),
     ensureOwner: vi.fn().mockResolvedValue(undefined),
   };
   const verifier: ProviderCredentialVerifierPort = {
@@ -75,14 +100,22 @@ function setup(options: { oauthExpiresAt?: string } = {}) {
   };
   const stateStore = new InMemoryOAuthStateStore({ now: () => now.getTime() });
   const vault = new CredentialVault(Buffer.alloc(32, 7).toString('base64'), 'test-v1');
-  const service = new AiConnectionsService(repository, vault, verifier, stateStore, oauth, {
-    geminiClientId: 'client-id',
-    geminiAuthorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
-    allowedRedirectUris: [callbackUrl],
-    now: () => now,
-  }, {
-    execute: async (input) => input.run(),
-  });
+  const service = new AiConnectionsService(
+    repository,
+    vault,
+    verifier,
+    stateStore,
+    oauth,
+    {
+      geminiClientId: 'client-id',
+      geminiAuthorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      allowedRedirectUris: [callbackUrl],
+      now: () => now,
+    },
+    {
+      execute: async (input) => input.run(),
+    },
+  );
   return { service, repository, verifier, oauth, stateStore };
 }
 
@@ -90,11 +123,15 @@ describe('AiConnectionsService', () => {
   it('returns shared connection metadata but never the submitted API key', async () => {
     const { service, verifier, repository } = setup();
 
-    const result = await service.addApiKey(actor, {
-      provider: 'OPENAI',
-      displayLabel: 'Minha chave',
-      apiKey: 'sk-test-secret',
-    }, 'add-key:0001');
+    const result = await service.addApiKey(
+      actor,
+      {
+        provider: 'OPENAI',
+        displayLabel: 'Minha chave',
+        apiKey: 'sk-test-secret',
+      },
+      'add-key:0001',
+    );
 
     expect(result.maskedCredential).toBe('…cret');
     expect(JSON.stringify(result)).not.toContain('sk-test-secret');
@@ -109,11 +146,15 @@ describe('AiConnectionsService', () => {
     vi.mocked(verifier.verify).mockResolvedValue({ valid: false, scopes: [], expiresAt: null });
 
     await expect(
-      service.addApiKey(actor, {
-        provider: 'GEMINI',
-        displayLabel: 'Gemini',
-        apiKey: 'bad-secret',
-      }, 'add-key:0002'),
+      service.addApiKey(
+        actor,
+        {
+          provider: 'GEMINI',
+          displayLabel: 'Gemini',
+          apiKey: 'bad-secret',
+        },
+        'add-key:0002',
+      ),
     ).rejects.toMatchObject({ response: { code: 'CONNECTION_INVALID' } });
     expect(repository.createApiKey).not.toHaveBeenCalled();
   });
@@ -140,12 +181,12 @@ describe('AiConnectionsService', () => {
     expect(oauth.exchangeGeminiCode).not.toHaveBeenCalled();
   });
 
-  it('keeps the PKCE verifier, nonce, owner and redirect server-side', async () => {
+  it('keeps the PKCE verifier, owner and redirect server-side without claiming OIDC nonce', async () => {
     const { service, verifier } = setup();
     const started = await service.startOAuth(actor, 'GEMINI', callbackUrl, 'oauth:0003');
 
     expect(started.authorizationUrl).toContain('code_challenge=');
-    expect(started.authorizationUrl).toContain('nonce=');
+    expect(started.authorizationUrl).not.toContain('nonce=');
     expect(JSON.stringify(started)).not.toMatch(/verifier|auth0\|owner/i);
 
     await service.finishOAuth('GEMINI', started.state, 'authorization-code');
@@ -178,15 +219,20 @@ describe('AiConnectionsService', () => {
   it('returns not found for another owner connection', async () => {
     const { service } = setup();
 
-    await expect(service.remove(otherActor, 'cm1234567890', 'remove:0001')).rejects.toMatchObject({ status: 404 });
+    await expect(service.remove(otherActor, 'cm1234567890', 'remove:0001')).rejects.toMatchObject({
+      status: 404,
+    });
   });
 
   it('revokes locally before best-effort remote revocation and stays revoked on remote failure', async () => {
     const { service, repository, oauth } = setup();
     vi.mocked(oauth.revokeGemini).mockRejectedValue(new Error('body-with-token-secret'));
-    vi.mocked(repository.revokeOwned).mockResolvedValue(
-      connection({ provider: 'GEMINI', credentialMode: 'OAUTH', state: 'REVOKED' }),
-    );
+    vi.mocked(repository.revokeOwned).mockResolvedValue({
+      result: publicConnection(
+        connection({ provider: 'GEMINI', credentialMode: 'OAUTH', state: 'REVOKED' }),
+      ),
+      replayed: false,
+    });
 
     const result = await service.remove(actor, 'cm1234567890', 'remove:0002');
 

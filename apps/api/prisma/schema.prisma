@@ -8,19 +8,20 @@ datasource db {
 }
 
 model User {
-  id                   String                @id @default(cuid())
-  auth0Sub             String                @unique
-  email                String?               @unique
-  name                 String?
-  role                 UserRole              @default(USER)
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
-  jobs                 ExtractionJob[]
-  auditEvents          AuditEvent[]
-  aiConnections        AiConnection[]
-  promptProjects       PromptProject[]
-  promptGenerationJobs PromptGenerationJob[]
-  creditLedgerEntries  CreditLedgerEntry[]
+  id                    String                @id @default(cuid())
+  auth0Sub              String                @unique
+  email                 String?               @unique
+  name                  String?
+  role                  UserRole              @default(USER)
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  jobs                  ExtractionJob[]
+  auditEvents           AuditEvent[]
+  aiConnections         AiConnection[]
+  mutationIdempotencies MutationIdempotency[]
+  promptProjects        PromptProject[]
+  promptGenerationJobs  PromptGenerationJob[]
+  creditLedgerEntries   CreditLedgerEntry[]
 }
 
 enum UserRole {
@@ -111,6 +112,11 @@ enum ConnectionState {
   INVALID
 }
 
+enum MutationIdempotencyStatus {
+  PENDING
+  COMPLETE
+}
+
 enum PromptProjectState {
   ACTIVE
   ARCHIVED
@@ -199,6 +205,24 @@ model ProviderCredential {
 
   @@unique([connectionId, version])
   @@index([connectionId, createdAt])
+}
+
+model MutationIdempotency {
+  id           String                    @id @default(cuid())
+  ownerId      String
+  owner        User                      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  operation    String                    @db.VarChar(64)
+  keyHash      String                    @db.Char(64)
+  requestHash  String                    @db.Char(64)
+  status       MutationIdempotencyStatus @default(PENDING)
+  publicResult Json?
+  entityId     String?                   @db.VarChar(64)
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  completedAt  DateTime?
+
+  @@unique([ownerId, operation, keyHash])
+  @@index([status, updatedAt])
 }
 
 model PromptProject {

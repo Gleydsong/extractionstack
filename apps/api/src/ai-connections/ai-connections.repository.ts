@@ -1,9 +1,16 @@
-import { Inject, Injectable } from '@nestjs/common';
-import type { Auth0User } from '@extractionstack/shared';
-import { PrismaClient, type AiConnection as PrismaAiConnection, type Prisma } from '@prisma/client';
+import { ConflictException, Inject, Injectable } from '@nestjs/common';
+import { AiConnectionSchema, type Auth0User } from '@extractionstack/shared';
+import {
+  Prisma,
+  PrismaClient,
+  type AiConnection as PrismaAiConnection,
+  type MutationIdempotency,
+} from '@prisma/client';
 import type { CredentialEnvelope } from './credential-vault.js';
 import type {
   AiConnectionsRepositoryPort,
+  DurableConnectionOutcome,
+  DurableMutationInput,
   StoredAiConnection,
 } from './ai-connections.service.js';
 
@@ -30,12 +37,33 @@ export class AiConnectionsRepository implements AiConnectionsRepositoryPort {
   async createApiKey(
     actor: Auth0User,
     input: Parameters<AiConnectionsRepositoryPort['createApiKey']>[1],
-  ): Promise<StoredAiConnection> {
-    return this.createConnection(actor, {
-      ...input,
-      provider: input.provider,
-      credentialMode: 'API_KEY',
-      auditAction: 'ai_connection.api_key_created',
+  ): Promise<DurableConnectionOutcome> {
+    const owner = await this.upsertActor(actor);
+    return this.executeDurableMutation(owner.id, input.idempotency, async (transaction) => {
+      const connection = await transaction.aiConnection.create({
+        data: {
+          ownerId: owner.id,
+          provider: input.provider,
+          displayLabel: input.displayLabel,
+          credentialMode: 'API_KEY',
+          state: 'ACTIVE',
+          maskedCredential: input.maskedCredential,
+          scopes: [...input.scopes],
+          expiresAt: input.expiresAt,
+          validatedAt: input.validatedAt,
+          credentials: { create: { version: 1, ...toPrismaEnvelope(input.envelope) } },
+        },
+      });
+      await transaction.auditEvent.create({
+        data: {
+          actorId: owner.id,
+          action: 'ai_connection.api_key_created',
+          entityType: 'AiConnection',
+          entityId: connection.id,
+          metadata: { provider: input.provider, credentialMode: 'API_KEY' },
+        },
+      });
+      return connection;
     });
   }
 
@@ -70,58 +98,83 @@ export class AiConnectionsRepository implements AiConnectionsRepositoryPort {
     actor: Auth0User,
     id: string,
     validation: Parameters<AiConnectionsRepositoryPort['updateValidation']>[2],
-  ): Promise<StoredAiConnection | null> {
-    const candidate = await this.prisma.aiConnection.findFirst({
-      where: { id, owner: { auth0Sub: actor.sub }, state: { not: 'REVOKED' } },
-      select: { id: true, ownerId: true },
-    });
-    if (!candidate) return null;
-    const updated = await this.prisma.$transaction(async (transaction) => {
-      await transaction.aiConnection.updateMany({
-        where: { id, ownerId: candidate.ownerId, state: { not: 'REVOKED' } },
-        data: { ...validation, scopes: [...validation.scopes] },
-      });
-      await transaction.auditEvent.create({
-        data: {
-          actorId: candidate.ownerId,
-          action: 'ai_connection.validated',
-          entityType: 'AiConnection',
-          entityId: id,
-          metadata: { state: validation.state },
+  ): Promise<DurableConnectionOutcome | null> {
+    const owner = await this.prisma.user.findUnique({ where: { auth0Sub: actor.sub } });
+    if (!owner) return null;
+    try {
+      return await this.executeDurableMutation(
+        owner.id,
+        validation.idempotency,
+        async (transaction) => {
+          const mutation = await transaction.aiConnection.updateMany({
+            where: { id, ownerId: owner.id, state: { not: 'REVOKED' } },
+            data: {
+              state: validation.state,
+              scopes: [...validation.scopes],
+              expiresAt: validation.expiresAt,
+              validatedAt: validation.validatedAt,
+            },
+          });
+          if (mutation.count !== 1) throw new MutationTargetMissingError();
+          await transaction.auditEvent.create({
+            data: {
+              actorId: owner.id,
+              action: 'ai_connection.validated',
+              entityType: 'AiConnection',
+              entityId: id,
+              metadata: { state: validation.state },
+            },
+          });
+          const updated = await transaction.aiConnection.findFirst({
+            where: { id, ownerId: owner.id, state: { not: 'REVOKED' } },
+          });
+          if (!updated) throw new MutationTargetMissingError();
+          return updated;
         },
-      });
-      return transaction.aiConnection.findFirst({ where: { id, ownerId: candidate.ownerId } });
-    });
-    return updated ? mapConnection(updated) : null;
+      );
+    } catch (error) {
+      if (error instanceof MutationTargetMissingError) return null;
+      throw error;
+    }
   }
 
-  async revokeOwned(actor: Auth0User, id: string): Promise<StoredAiConnection | null> {
-    const candidate = await this.prisma.aiConnection.findFirst({
-      where: { id, owner: { auth0Sub: actor.sub } },
-      select: { id: true, ownerId: true },
-    });
-    if (!candidate) return null;
-    const updated = await this.prisma.$transaction(async (transaction) => {
-      await transaction.aiConnection.updateMany({
-        where: { id, ownerId: candidate.ownerId },
-        data: { state: 'REVOKED' },
+  async revokeOwned(
+    actor: Auth0User,
+    id: string,
+    idempotency: DurableMutationInput,
+  ): Promise<DurableConnectionOutcome | null> {
+    const owner = await this.prisma.user.findUnique({ where: { auth0Sub: actor.sub } });
+    if (!owner) return null;
+    try {
+      return await this.executeDurableMutation(owner.id, idempotency, async (transaction) => {
+        const mutation = await transaction.aiConnection.updateMany({
+          where: { id, ownerId: owner.id, state: { not: 'REVOKED' } },
+          data: { state: 'REVOKED' },
+        });
+        if (mutation.count !== 1) throw new MutationTargetMissingError();
+        await transaction.providerCredential.updateMany({
+          where: { connectionId: id, connection: { ownerId: owner.id }, deletedAt: null },
+          data: { deletedAt: new Date() },
+        });
+        await transaction.auditEvent.create({
+          data: {
+            actorId: owner.id,
+            action: 'ai_connection.revoked',
+            entityType: 'AiConnection',
+            entityId: id,
+            metadata: {},
+          },
+        });
+        const updated = await transaction.aiConnection.findFirst({
+          where: { id, ownerId: owner.id, state: 'REVOKED' },
+        });
+        if (!updated) throw new MutationTargetMissingError();
+        return updated;
       });
-      await transaction.providerCredential.updateMany({
-        where: { connectionId: id, connection: { ownerId: candidate.ownerId }, deletedAt: null },
-        data: { deletedAt: new Date() },
-      });
-      await transaction.auditEvent.create({
-        data: {
-          actorId: candidate.ownerId,
-          action: 'ai_connection.revoked',
-          entityType: 'AiConnection',
-          entityId: id,
-          metadata: {},
-        },
-      });
-      return transaction.aiConnection.findFirst({ where: { id, ownerId: candidate.ownerId } });
-    });
-    return updated ? mapConnection(updated) : null;
+    } catch (error) {
+      if (error instanceof MutationTargetMissingError) return null;
+      throw error;
+    }
   }
 
   async ensureOwner(actor: Auth0User): Promise<void> {
@@ -139,24 +192,6 @@ export class AiConnectionsRepository implements AiConnectionsRepositoryPort {
         },
       },
     });
-  }
-
-  private async createConnection(
-    actor: Auth0User,
-    input: {
-      provider: 'OPENAI' | 'GEMINI';
-      credentialMode: 'API_KEY' | 'OAUTH';
-      displayLabel: string;
-      maskedCredential: string;
-      envelope: CredentialEnvelope;
-      scopes: readonly string[];
-      expiresAt: Date | null;
-      validatedAt: Date;
-      auditAction: string;
-    },
-  ): Promise<StoredAiConnection> {
-    const owner = await this.upsertActor(actor);
-    return this.persistConnection(owner.id, input);
   }
 
   private async persistConnection(
@@ -219,6 +254,113 @@ export class AiConnectionsRepository implements AiConnectionsRepositoryPort {
       },
     });
   }
+
+  private async executeDurableMutation(
+    ownerId: string,
+    idempotency: DurableMutationInput,
+    mutate: (transaction: Prisma.TransactionClient) => Promise<PrismaAiConnection>,
+  ): Promise<DurableConnectionOutcome> {
+    assertDurableMutation(idempotency);
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const existing = await transaction.mutationIdempotency.findUnique({
+          where: {
+            ownerId_operation_keyHash: {
+              ownerId,
+              operation: idempotency.operation,
+              keyHash: idempotency.keyHash,
+            },
+          },
+        });
+        if (existing) return replayDurableMutation(existing, idempotency);
+
+        const durable = await transaction.mutationIdempotency.create({
+          data: {
+            ownerId,
+            operation: idempotency.operation,
+            keyHash: idempotency.keyHash,
+            requestHash: idempotency.requestHash,
+          },
+        });
+        const connection = await mutate(transaction);
+        const result = publicConnection(connection);
+        await transaction.mutationIdempotency.update({
+          where: { id: durable.id },
+          data: {
+            status: 'COMPLETE',
+            publicResult: result as Prisma.InputJsonValue,
+            entityId: connection.id,
+            completedAt: new Date(),
+          },
+        });
+        return { result, replayed: false };
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const existing = await this.prisma.mutationIdempotency.findUnique({
+        where: {
+          ownerId_operation_keyHash: {
+            ownerId,
+            operation: idempotency.operation,
+            keyHash: idempotency.keyHash,
+          },
+        },
+      });
+      if (!existing) throw error;
+      return replayDurableMutation(existing, idempotency);
+    }
+  }
+}
+
+class MutationTargetMissingError extends Error {}
+
+function assertDurableMutation(input: DurableMutationInput): void {
+  if (
+    input.operation.length < 1 ||
+    input.operation.length > 64 ||
+    !/^[a-z0-9:-]+$/.test(input.operation) ||
+    !/^[a-f0-9]{64}$/.test(input.keyHash) ||
+    !/^[a-f0-9]{64}$/.test(input.requestHash)
+  ) {
+    throw new Error('invalid durable mutation metadata');
+  }
+}
+
+function replayDurableMutation(
+  existing: MutationIdempotency,
+  requested: DurableMutationInput,
+): DurableConnectionOutcome {
+  if (existing.requestHash !== requested.requestHash) {
+    throw new ConflictException({
+      code: 'CONFLICT',
+      message: 'idempotency key was already used for another request',
+    });
+  }
+  if (existing.status !== 'COMPLETE' || existing.publicResult === null) {
+    throw new ConflictException({ code: 'CONFLICT', message: 'request is already in progress' });
+  }
+  return { result: AiConnectionSchema.parse(existing.publicResult), replayed: true };
+}
+
+function publicConnection(connection: PrismaAiConnection) {
+  return AiConnectionSchema.parse({
+    id: connection.id,
+    provider: connection.provider,
+    displayLabel: connection.displayLabel,
+    credentialMode: connection.credentialMode,
+    state: connection.state,
+    maskedCredential: connection.maskedCredential,
+    scopes: connection.scopes,
+    expiresAt: connection.expiresAt?.toISOString() ?? null,
+    validatedAt: connection.validatedAt?.toISOString() ?? null,
+    lastUsedAt: connection.lastUsedAt?.toISOString() ?? null,
+    createdAt: connection.createdAt.toISOString(),
+    updatedAt: connection.updatedAt.toISOString(),
+  });
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 function mapConnection(connection: PrismaAiConnection): StoredAiConnection {
@@ -292,7 +434,8 @@ export function fromPrismaEnvelope(credential: {
     credential.encryptedDataKey.byteLength !== 32 ||
     credential.ciphertext.byteLength < 1 ||
     credential.ciphertext.byteLength > 64 * 1024
-  ) throw new Error('invalid credential envelope');
+  )
+    throw new Error('invalid credential envelope');
   return Object.freeze({
     algorithm: credential.algorithm,
     keyVersion: credential.keyVersion,
@@ -306,7 +449,8 @@ export function fromPrismaEnvelope(credential: {
 }
 
 function parseMetadata(value: unknown): EnvelopeMetadata {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid credential envelope');
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('invalid credential envelope');
   const metadata = value as Record<string, unknown>;
   const keys = Object.keys(metadata).sort();
   const expected = ['iv', 'schemaVersion', 'tag', 'wrappedKeyIv', 'wrappedKeyTag'];
@@ -328,7 +472,10 @@ function assertCanonicalBase64(
   minimumBytes = 1,
   maximumBytes = 64 * 1024,
 ): asserts value is string {
-  if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  ) {
     throw new Error('invalid credential envelope');
   }
   const decoded = Buffer.from(value, 'base64');
@@ -336,7 +483,8 @@ function assertCanonicalBase64(
     decoded.length < minimumBytes ||
     decoded.length > maximumBytes ||
     decoded.toString('base64') !== value
-  ) throw new Error('invalid credential envelope');
+  )
+    throw new Error('invalid credential envelope');
 }
 
 function decodeCanonical(value: string): Buffer {

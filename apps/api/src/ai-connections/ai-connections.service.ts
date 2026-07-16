@@ -28,7 +28,10 @@ export const OAUTH_STATE_STORE = Symbol('OAUTH_STATE_STORE');
 export const GEMINI_OAUTH_CLIENT = Symbol('GEMINI_OAUTH_CLIENT');
 export const AI_CONNECTIONS_CONFIG = Symbol('AI_CONNECTIONS_CONFIG');
 
-export type StoredAiConnection = Omit<AiConnection, 'createdAt' | 'updatedAt' | 'expiresAt' | 'validatedAt' | 'lastUsedAt'> &
+export type StoredAiConnection = Omit<
+  AiConnection,
+  'createdAt' | 'updatedAt' | 'expiresAt' | 'validatedAt' | 'lastUsedAt'
+> &
   Readonly<{
     ownerId: string;
     createdAt: Date;
@@ -43,6 +46,17 @@ export type CredentialReference = Readonly<{
   ownerId: string;
   provider: LlmProvider;
   credentialMode: CredentialMode;
+}>;
+
+export type DurableMutationInput = Readonly<{
+  operation: string;
+  keyHash: string;
+  requestHash: string;
+}>;
+
+export type DurableConnectionOutcome = Readonly<{
+  result: AiConnection;
+  replayed: boolean;
 }>;
 
 export type CredentialValidation = Readonly<{
@@ -71,7 +85,6 @@ export interface OAuthTokenClientPort {
     code: string;
     redirectUri: string;
     verifier: string;
-    nonce: string;
   }): Promise<OAuthTokens>;
   revokeGemini(accessToken: string): Promise<void>;
 }
@@ -88,8 +101,9 @@ export interface AiConnectionsRepositoryPort {
       scopes: readonly string[];
       expiresAt: Date | null;
       validatedAt: Date;
+      idempotency: DurableMutationInput;
     },
-  ): Promise<StoredAiConnection>;
+  ): Promise<DurableConnectionOutcome>;
   createOAuth(
     ownerSub: string,
     input: {
@@ -108,9 +122,19 @@ export interface AiConnectionsRepositoryPort {
   updateValidation(
     actor: Auth0User,
     id: string,
-    validation: { state: 'ACTIVE' | 'INVALID'; scopes: readonly string[]; expiresAt: Date | null; validatedAt: Date },
-  ): Promise<StoredAiConnection | null>;
-  revokeOwned(actor: Auth0User, id: string): Promise<StoredAiConnection | null>;
+    validation: {
+      state: 'ACTIVE' | 'INVALID';
+      scopes: readonly string[];
+      expiresAt: Date | null;
+      validatedAt: Date;
+      idempotency: DurableMutationInput;
+    },
+  ): Promise<DurableConnectionOutcome | null>;
+  revokeOwned(
+    actor: Auth0User,
+    id: string,
+    idempotency: DurableMutationInput,
+  ): Promise<DurableConnectionOutcome | null>;
   ensureOwner(actor: Auth0User): Promise<void>;
 }
 
@@ -122,20 +146,26 @@ export type AiConnectionsConfig = Readonly<{
   now?: () => Date;
 }>;
 
-const ApiKeyCommandSchema = z.object({
-  provider: z.enum(['OPENAI', 'GEMINI']),
-  displayLabel: z.string().trim().min(1).max(120),
-  apiKey: z.string().min(8).max(16_384),
-}).strict();
+const ApiKeyCommandSchema = z
+  .object({
+    provider: z.enum(['OPENAI', 'GEMINI']),
+    displayLabel: z.string().trim().min(1).max(120),
+    apiKey: z.string().min(8).max(16_384),
+  })
+  .strict();
 
-const OAuthTokenPayloadSchema = z.object({
-  accessToken: z.string().min(1).max(16_384),
-  refreshToken: z.string().min(1).max(16_384).nullable(),
-}).strict();
-const OAuthStartSchema = z.object({
-  state: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-  authorizationUrl: z.string().url().max(4_096),
-}).strict();
+const OAuthTokenPayloadSchema = z
+  .object({
+    accessToken: z.string().min(1).max(16_384),
+    refreshToken: z.string().min(1).max(16_384).nullable(),
+  })
+  .strict();
+const OAuthStartSchema = z
+  .object({
+    state: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    authorizationUrl: z.string().url().max(4_096),
+  })
+  .strict();
 
 @Injectable()
 export class AiConnectionsService {
@@ -153,17 +183,22 @@ export class AiConnectionsService {
     return Promise.all((await this.repository.listOwned(actor)).map(toPublicConnection));
   }
 
-  async addApiKey(actor: Auth0User, rawCommand: unknown, idempotencyKey: string): Promise<AiConnection> {
+  async addApiKey(
+    actor: Auth0User,
+    rawCommand: unknown,
+    idempotencyKey: string,
+  ): Promise<AiConnection> {
     const command = ApiKeyCommandSchema.parse(rawCommand);
+    const requestHash = fingerprint({
+      provider: command.provider,
+      displayLabel: command.displayLabel,
+      apiKeyHash: secretHash(command.apiKey),
+    });
     return this.idempotency.execute({
       ownerSub: actor.sub,
       operation: 'add-api-key',
       key: idempotencyKey,
-      fingerprint: fingerprint({
-        provider: command.provider,
-        displayLabel: command.displayLabel,
-        apiKeyHash: secretHash(command.apiKey),
-      }),
+      fingerprint: requestHash,
       parse: (value) => AiConnectionSchema.parse(value),
       run: async () => {
         const validation = await this.verifyOrThrow(command.provider, 'API_KEY', command.apiKey);
@@ -176,8 +211,13 @@ export class AiConnectionsService {
           scopes: validation.scopes,
           expiresAt: validation.expiresAt ? new Date(validation.expiresAt) : null,
           validatedAt: this.now(),
+          idempotency: {
+            operation: 'add-api-key',
+            keyHash: secretHash(idempotencyKey),
+            requestHash,
+          },
         });
-        return toPublicConnection(connection);
+        return connection.result;
       },
     });
   }
@@ -207,17 +247,14 @@ export class AiConnectionsService {
       operation: 'start-gemini-oauth',
       key: idempotencyKey,
       fingerprint: fingerprint({ provider, redirectUri }),
-      parse: (value) => OAuthStartSchema.parse(value),
       run: async () => {
         await this.repository.ensureOwner(actor);
         const verifier = randomBytes(32).toString('base64url');
-        const nonce = randomBytes(32).toString('base64url');
         const state = await this.oauthStates.create({
           ownerSub: actor.sub,
           provider,
           redirectUri,
           verifier,
-          nonce,
         });
         const authorizationUrl = new URL(this.config.geminiAuthorizationUrl);
         authorizationUrl.search = new URLSearchParams({
@@ -231,34 +268,40 @@ export class AiConnectionsService {
           access_type: 'offline',
           prompt: 'consent',
           state,
-          nonce,
           code_challenge: createHash('sha256').update(verifier).digest('base64url'),
           code_challenge_method: 'S256',
         }).toString();
         return OAuthStartSchema.parse({ state, authorizationUrl: authorizationUrl.toString() });
       },
+      encodeResult: (value) =>
+        this.vault.encrypt(actor.sub, 'GEMINI', JSON.stringify(OAuthStartSchema.parse(value))),
+      parse: async (value) => {
+        const plaintext = await this.vault.decrypt(
+          actor.sub,
+          'GEMINI',
+          value as CredentialEnvelope,
+        );
+        return OAuthStartSchema.parse(JSON.parse(plaintext));
+      },
+      cacheRequired: true,
     });
   }
 
-  async finishOAuth(
-    provider: 'GEMINI',
-    state: string,
-    code: string,
-  ): Promise<AiConnection> {
+  async finishOAuth(provider: 'GEMINI', state: string, code: string): Promise<AiConnection> {
     if (provider !== 'GEMINI') throw oauthProviderInvalid();
     const storedState = await this.oauthStates.consume(state);
     if (
       !storedState ||
       storedState.provider !== provider ||
       !this.config.allowedRedirectUris.includes(storedState.redirectUri)
-    ) throw oauthStateInvalid();
+    )
+      throw oauthStateInvalid();
     let tokens: OAuthTokens;
     try {
       tokens = await this.oauthClient.exchangeGeminiCode({
         code,
         redirectUri: storedState.redirectUri,
         verifier: storedState.verifier,
-        nonce: storedState.nonce,
       });
     } catch {
       throw new BadGatewayException({
@@ -284,20 +327,34 @@ export class AiConnectionsService {
   }
 
   async validate(actor: Auth0User, id: string, idempotencyKey: string): Promise<AiConnection> {
+    const requestHash = fingerprint({ id });
     return this.idempotency.execute({
       ownerSub: actor.sub,
       operation: `validate:${id}`,
       key: idempotencyKey,
-      fingerprint: fingerprint({ id }),
+      fingerprint: requestHash,
       parse: (value) => AiConnectionSchema.parse(value),
-      run: () => this.validateOnce(actor, id),
+      run: () =>
+        this.validateOnce(actor, id, {
+          operation: `validate:${id}`,
+          keyHash: secretHash(idempotencyKey),
+          requestHash,
+        }),
     });
   }
 
-  private async validateOnce(actor: Auth0User, id: string): Promise<AiConnection> {
+  private async validateOnce(
+    actor: Auth0User,
+    id: string,
+    idempotency: DurableMutationInput,
+  ): Promise<AiConnection> {
     const owned = await this.repository.findOwnedCredential(actor, id);
     if (!owned?.envelope || owned.connection.state === 'REVOKED') throw connectionNotFound();
-    const plaintext = await this.vault.decrypt(actor.sub, owned.connection.provider, owned.envelope);
+    const plaintext = await this.vault.decrypt(
+      actor.sub,
+      owned.connection.provider,
+      owned.envelope,
+    );
     const credential = credentialValue(owned.connection.credentialMode, plaintext);
     const validation = await this.verifyOrThrow(
       owned.connection.provider as 'OPENAI' | 'GEMINI',
@@ -309,29 +366,45 @@ export class AiConnectionsService {
       scopes: validation.scopes,
       expiresAt: validation.expiresAt ? new Date(validation.expiresAt) : null,
       validatedAt: this.now(),
+      idempotency,
     });
     if (!updated) throw connectionNotFound();
-    return toPublicConnection(updated);
+    return updated.result;
   }
 
   async remove(actor: Auth0User, id: string, idempotencyKey: string): Promise<AiConnection> {
+    const requestHash = fingerprint({ id });
     return this.idempotency.execute({
       ownerSub: actor.sub,
       operation: `remove:${id}`,
       key: idempotencyKey,
-      fingerprint: fingerprint({ id }),
+      fingerprint: requestHash,
       parse: (value) => AiConnectionSchema.parse(value),
-      run: () => this.removeOnce(actor, id),
+      run: () =>
+        this.removeOnce(actor, id, {
+          operation: `remove:${id}`,
+          keyHash: secretHash(idempotencyKey),
+          requestHash,
+        }),
     });
   }
 
-  private async removeOnce(actor: Auth0User, id: string): Promise<AiConnection> {
+  private async removeOnce(
+    actor: Auth0User,
+    id: string,
+    idempotency: DurableMutationInput,
+  ): Promise<AiConnection> {
     const owned = await this.repository.findOwnedCredential(actor, id);
     if (!owned) throw connectionNotFound();
-    const revoked = await this.repository.revokeOwned(actor, id);
+    const revoked = await this.repository.revokeOwned(actor, id, idempotency);
     if (!revoked) throw connectionNotFound();
 
-    if (owned.connection.provider === 'GEMINI' && owned.connection.credentialMode === 'OAUTH' && owned.envelope) {
+    if (
+      !revoked.replayed &&
+      owned.connection.provider === 'GEMINI' &&
+      owned.connection.credentialMode === 'OAUTH' &&
+      owned.envelope
+    ) {
       try {
         const plaintext = await this.vault.decrypt(actor.sub, 'GEMINI', owned.envelope);
         const payload = OAuthTokenPayloadSchema.parse(JSON.parse(plaintext));
@@ -340,7 +413,7 @@ export class AiConnectionsService {
         // Local revocation is authoritative; remote revocation is best effort.
       }
     }
-    return toPublicConnection(revoked);
+    return revoked.result;
   }
 
   async credentialReference(actor: Auth0User, id: string): Promise<CredentialReference> {
@@ -369,7 +442,10 @@ export class AiConnectionsService {
       });
     }
     if (!validation.valid) {
-      throw new BadRequestException({ code: 'CONNECTION_INVALID', message: 'Provider credential is invalid' });
+      throw new BadRequestException({
+        code: 'CONNECTION_INVALID',
+        message: 'Provider credential is invalid',
+      });
     }
     return validation;
   }
@@ -419,11 +495,17 @@ function connectionNotFound(): NotFoundException {
 }
 
 function oauthStateInvalid(): BadRequestException {
-  return new BadRequestException({ code: 'OAUTH_STATE_INVALID', message: 'OAuth state is invalid' });
+  return new BadRequestException({
+    code: 'OAUTH_STATE_INVALID',
+    message: 'OAuth state is invalid',
+  });
 }
 
 function oauthProviderInvalid(): BadRequestException {
-  return new BadRequestException({ code: 'VALIDATION', message: 'OAuth is supported only for Gemini' });
+  return new BadRequestException({
+    code: 'VALIDATION',
+    message: 'OAuth is supported only for Gemini',
+  });
 }
 
 function assertExactHttpsOrLocalRedirect(value: string): void {
@@ -431,9 +513,20 @@ function assertExactHttpsOrLocalRedirect(value: string): void {
   try {
     url = new URL(value);
   } catch {
-    throw new BadRequestException({ code: 'OAUTH_REDIRECT_INVALID', message: 'OAuth redirect URI is not allowed' });
+    throw new BadRequestException({
+      code: 'OAUTH_REDIRECT_INVALID',
+      message: 'OAuth redirect URI is not allowed',
+    });
   }
-  if (url.username || url.password || url.hash || (url.protocol !== 'https:' && url.hostname !== 'localhost')) {
-    throw new BadRequestException({ code: 'OAUTH_REDIRECT_INVALID', message: 'OAuth redirect URI is not allowed' });
+  if (
+    url.username ||
+    url.password ||
+    url.hash ||
+    (url.protocol !== 'https:' && url.hostname !== 'localhost')
+  ) {
+    throw new BadRequestException({
+      code: 'OAUTH_REDIRECT_INVALID',
+      message: 'OAuth redirect URI is not allowed',
+    });
   }
 }

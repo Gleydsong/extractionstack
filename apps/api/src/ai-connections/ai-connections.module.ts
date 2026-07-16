@@ -26,13 +26,14 @@ import {
 
 const MAX_PROVIDER_BODY_BYTES = 64 * 1024;
 
-const TokenResponseSchema = z.object({
-  access_token: z.string().min(1).max(16_384),
-  refresh_token: z.string().min(1).max(16_384).optional(),
-  expires_in: z.number().int().positive().max(31_536_000),
-  scope: z.string().max(8_192).default(''),
-  id_token: z.string().max(16_384).optional(),
-}).passthrough();
+const TokenResponseSchema = z
+  .object({
+    access_token: z.string().min(1).max(16_384),
+    refresh_token: z.string().min(1).max(16_384).optional(),
+    expires_in: z.number().int().positive().max(31_536_000),
+    scope: z.string().max(8_192).default(''),
+  })
+  .passthrough();
 
 @Injectable()
 export class HttpProviderCredentialVerifier implements ProviderCredentialVerifierPort {
@@ -43,9 +44,10 @@ export class HttpProviderCredentialVerifier implements ProviderCredentialVerifie
 
   async verify(provider: 'OPENAI' | 'GEMINI', mode: 'API_KEY' | 'OAUTH', credential: string) {
     const runtime = loadRuntimeEnv(this.env);
-    const endpoint = provider === 'OPENAI'
-      ? new URL('models?limit=1', ensureTrailingSlash(runtime.LLM_OPENAI_BASE_URL))
-      : new URL('models?pageSize=1', ensureTrailingSlash(runtime.LLM_GEMINI_BASE_URL));
+    const endpoint =
+      provider === 'OPENAI'
+        ? new URL('models?limit=1', ensureTrailingSlash(runtime.LLM_OPENAI_BASE_URL))
+        : new URL('models?pageSize=1', ensureTrailingSlash(runtime.LLM_GEMINI_BASE_URL));
     const headers: Record<string, string> = { accept: 'application/json' };
     if (provider === 'OPENAI' || mode === 'OAUTH') headers.authorization = `Bearer ${credential}`;
     else headers['x-goog-api-key'] = credential;
@@ -78,7 +80,6 @@ export class GeminiOAuthClient implements OAuthTokenClientPort {
     code: string;
     redirectUri: string;
     verifier: string;
-    nonce: string;
   }): Promise<OAuthTokens> {
     const config = oauthEnvironment(this.env);
     const response = await this.fetchImpl(config.tokenUrl, {
@@ -98,9 +99,6 @@ export class GeminiOAuthClient implements OAuthTokenClientPort {
     const body = await readBoundedJson(response);
     if (!response.ok) throw new Error('OAuth exchange failed');
     const tokens = TokenResponseSchema.parse(body);
-    if (tokens.id_token && idTokenNonce(tokens.id_token) !== input.nonce) {
-      throw new Error('OAuth nonce mismatch');
-    }
     return Object.freeze({
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token ?? null,
@@ -130,44 +128,7 @@ export class GeminiOAuthClient implements OAuthTokenClientPort {
     AiConnectionsRepository,
     {
       provide: ProviderRegistry,
-      useFactory: () => {
-        const env = loadRuntimeEnv(process.env);
-        return new ProviderRegistry([
-          {
-            provider: 'OPENAI',
-            credentialModes: ['API_KEY', 'PLATFORM_CREDITS'],
-            models: env.LLM_OPENAI_MODEL_ALLOWLIST,
-            contextWindowTokens: env.LLM_MAX_INPUT_TOKENS,
-            maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
-            supportsStructuredOutput: true,
-            supportsCancellation: false,
-            supportsCredentialRefresh: false,
-            oauthScopes: [],
-            previewEligible: true,
-            pricingMetadataVersion: 'configured-2026-07-16',
-            enabled: true,
-            circuitBreakerOpen: false,
-          },
-          {
-            provider: 'GEMINI',
-            credentialModes: ['OAUTH', 'API_KEY', 'PLATFORM_CREDITS'],
-            models: env.LLM_GEMINI_MODEL_ALLOWLIST,
-            contextWindowTokens: env.LLM_MAX_INPUT_TOKENS,
-            maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
-            supportsStructuredOutput: true,
-            supportsCancellation: false,
-            supportsCredentialRefresh: true,
-            oauthScopes: [
-              'https://www.googleapis.com/auth/cloud-platform',
-              'https://www.googleapis.com/auth/generative-language.retriever',
-            ],
-            previewEligible: true,
-            pricingMetadataVersion: 'configured-2026-07-16',
-            enabled: true,
-            circuitBreakerOpen: false,
-          },
-        ]);
-      },
+      useFactory: () => createProviderRegistry(process.env),
     },
     { provide: AI_CONNECTIONS_REPOSITORY, useExisting: AiConnectionsRepository },
     {
@@ -208,7 +169,8 @@ export class GeminiOAuthClient implements OAuthTokenClientPort {
     { provide: OAUTH_STATE_STORE, useExisting: OAuthStateService },
     {
       provide: RedisIdempotencyService,
-      useFactory: (redis: ReturnType<typeof createOAuthRedis>) => new RedisIdempotencyService(redis),
+      useFactory: (redis: ReturnType<typeof createOAuthRedis>) =>
+        new RedisIdempotencyService(redis),
       inject: [OAUTH_STATE_REDIS],
     },
     { provide: IDEMPOTENCY_STORE, useExisting: RedisIdempotencyService },
@@ -229,14 +191,62 @@ export class GeminiOAuthClient implements OAuthTokenClientPort {
 })
 export class AiConnectionsModule {}
 
+export function createProviderRegistry(envInput: NodeJS.ProcessEnv): ProviderRegistry {
+  const env = loadRuntimeEnv(envInput);
+  const oauth = oauthEnvironment(envInput);
+  const geminiCredentialModes = oauth.enabled
+    ? (['OAUTH', 'API_KEY', 'PLATFORM_CREDITS'] as const)
+    : (['API_KEY', 'PLATFORM_CREDITS'] as const);
+  return new ProviderRegistry([
+    {
+      provider: 'OPENAI',
+      credentialModes: ['API_KEY', 'PLATFORM_CREDITS'],
+      models: env.LLM_OPENAI_MODEL_ALLOWLIST,
+      contextWindowTokens: env.LLM_MAX_INPUT_TOKENS,
+      maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
+      supportsStructuredOutput: true,
+      supportsCancellation: false,
+      supportsCredentialRefresh: false,
+      oauthScopes: [],
+      previewEligible: true,
+      pricingMetadataVersion: 'configured-2026-07-16',
+      enabled: true,
+      circuitBreakerOpen: false,
+    },
+    {
+      provider: 'GEMINI',
+      credentialModes: geminiCredentialModes,
+      models: env.LLM_GEMINI_MODEL_ALLOWLIST,
+      contextWindowTokens: env.LLM_MAX_INPUT_TOKENS,
+      maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
+      supportsStructuredOutput: true,
+      supportsCancellation: false,
+      supportsCredentialRefresh: oauth.enabled,
+      oauthScopes: oauth.enabled
+        ? [
+            'https://www.googleapis.com/auth/cloud-platform',
+            'https://www.googleapis.com/auth/generative-language.retriever',
+          ]
+        : [],
+      previewEligible: true,
+      pricingMetadataVersion: 'configured-2026-07-16',
+      enabled: true,
+      circuitBreakerOpen: false,
+    },
+  ]);
+}
+
 function oauthEnvironment(env: NodeJS.ProcessEnv) {
   const rawClientId = env.LLM_GEMINI_OAUTH_CLIENT_ID?.trim();
   const rawClientSecret = env.LLM_GEMINI_OAUTH_CLIENT_SECRET?.trim();
   const rawProjectId = env.LLM_GEMINI_OAUTH_PROJECT_ID?.trim();
   const rawRedirectUris = (env.LLM_GEMINI_OAUTH_REDIRECT_URIS ?? '')
-    .split(',').map((value) => value.trim()).filter(Boolean);
-  const enabled = Boolean(rawClientId && rawClientSecret && rawProjectId && rawRedirectUris.length > 0);
-  if (env.NODE_ENV === 'production' && !enabled) throw new Error('Gemini OAuth is not configured');
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const enabled = Boolean(
+    rawClientId && rawClientSecret && rawProjectId && rawRedirectUris.length > 0,
+  );
   const clientId = enabled
     ? z.string().trim().min(1).max(512).parse(rawClientId)
     : 'oauth-not-configured';
@@ -244,7 +254,10 @@ function oauthEnvironment(env: NodeJS.ProcessEnv) {
     ? z.string().trim().min(1).max(1_024).parse(rawClientSecret)
     : 'oauth-not-configured';
   const projectId = enabled
-    ? z.string().regex(/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/).parse(rawProjectId)
+    ? z
+        .string()
+        .regex(/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/)
+        .parse(rawProjectId)
     : 'oauth-not-configured';
   const authorizationUrl = exactHttpsUrl(
     env.LLM_GEMINI_OAUTH_AUTHORIZATION_URL ?? 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -272,7 +285,8 @@ function oauthEnvironment(env: NodeJS.ProcessEnv) {
 
 function exactHttpsUrl(value: string): string {
   const url = new URL(value);
-  if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('invalid OAuth endpoint');
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash)
+    throw new Error('invalid OAuth endpoint');
   return url.toString();
 }
 
@@ -282,7 +296,10 @@ function ensureTrailingSlash(value: string): string {
 
 async function readBoundedJson(response: Response): Promise<unknown> {
   const length = response.headers.get('content-length');
-  if (length && Number(length) > MAX_PROVIDER_BODY_BYTES) throw new Error('OAuth response too large');
+  if (length && Number(length) > MAX_PROVIDER_BODY_BYTES) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error('OAuth response too large');
+  }
   if (!response.body) return null;
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -299,6 +316,9 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       if (total > MAX_PROVIDER_BODY_BYTES) throw new Error('OAuth response too large');
       chunks.push(value);
     }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }
@@ -309,15 +329,4 @@ async function readBoundedJson(response: Response): Promise<unknown> {
     offset += chunk.byteLength;
   }
   return JSON.parse(new TextDecoder().decode(bytes));
-}
-
-function idTokenNonce(token: string): string | null {
-  const payload = token.split('.')[1];
-  if (!payload) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { nonce?: unknown };
-    return typeof parsed.nonce === 'string' ? parsed.nonce : null;
-  } catch {
-    return null;
-  }
 }
