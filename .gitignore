@@ -3,6 +3,7 @@ dist
 build
 .turbo
 .pnpm-store
+.worktrees/
 *.log
 .env
 .env.local
