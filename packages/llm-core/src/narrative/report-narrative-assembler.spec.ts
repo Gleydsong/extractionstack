@@ -150,6 +150,192 @@ describe('ReportNarrativeAssembler', () => {
     expect(Object.isFrozen(brief)).toBe(true);
     expect(Object.isFrozen(brief.safetyReasonCodes)).toBe(true);
   });
+
+  it('applies field-aware sanitization to URLs, headers, cookies, and free evidence', () => {
+    const report = reportFixture({
+      sections: {
+        ...reportFixture().sections,
+        authenticationSecurity: {
+          title: 'Segurança',
+          summary: 'Resumo.',
+          findings: [
+            {
+              name: 'Requisição observada',
+              category: 'security',
+              result: `curl -H 'Authorization: Bearer evidence-secret' https://example.test`,
+              locations: [],
+              confidence: 'confirmed',
+              probableFunction: 'Integração.',
+              limitations: ['password = "quoted secret with spaces" mode=readonly'],
+              evidence: [],
+            },
+          ],
+        },
+      },
+      technicalEvidence: {
+        ...reportFixture().technicalEvidence,
+        analyzedUrls: [
+          'https://alice:user-secret@example.test/path?view=full&api%5Fkey=abc&page=2',
+        ],
+        relevantHeaders: {
+          Authorization: 'Bearer header-secret\r\n continuation-secret',
+          Server: 'nginx\r\n build-safe',
+        },
+        cookies: ['session=cookie-secret\r\n folded-cookie-secret'],
+      },
+    });
+
+    const brief = assembler.assemble(report);
+
+    expect(brief.narrative).toContain('https://example.test/path?view=full&page=2');
+    expect(brief.narrative).toContain('Server: nginx build-safe');
+    expect(brief.narrative).toContain('mode=readonly');
+    expect(brief.narrative).not.toMatch(
+      /alice|user-secret|api%5Fkey|evidence-secret|quoted secret|header-secret|continuation-secret|cookie-secret|folded-cookie/i,
+    );
+  });
+
+  it('omits whole findings when a section overflows without partial sentinels', () => {
+    const shortFinding = {
+      name: 'Primeiro achado completo',
+      category: 'frontend',
+      result: 'Resultado curto.',
+      locations: [],
+      confidence: 'confirmed' as const,
+      probableFunction: 'Interface.',
+      limitations: [],
+      evidence: [],
+    };
+    const report = reportFixture({
+      sections: {
+        ...reportFixture().sections,
+        frontend: {
+          title: 'Frontend',
+          summary: 'Resumo.',
+          findings: [
+            shortFinding,
+            {
+              ...shortFinding,
+              name: 'Segundo achado não deve aparecer',
+              result: `${'conteúdo extenso '.repeat(80)}PARTIAL_FINDING_SENTINEL`,
+            },
+          ],
+        },
+      },
+    });
+
+    const brief = new ReportNarrativeAssembler({ maxSectionChars: 500 }).assemble(report);
+
+    expect(brief.narrative).toContain('Primeiro achado completo');
+    expect(brief.narrative).not.toContain('Segundo achado não deve aparecer');
+    expect(brief.narrative).not.toContain('PARTIAL_FINDING_SENTINEL');
+    expect(brief.narrative).not.toContain('[truncado]');
+    expect(brief.narrative).toContain('[Entradas adicionais omitidas por limite seguro]');
+  });
+
+  it('omits whole risk, recommendation, confidence, URL, and header entries on overflow', () => {
+    const report = reportFixture({
+      risks: [
+        {
+          severity: 'low',
+          status: 'potential_risk',
+          title: 'Risco curto',
+          description: 'Curto.',
+          evidence: [],
+        },
+        {
+          severity: 'high',
+          status: 'potential_risk',
+          title: 'Risco omitido',
+          description: `${'longo '.repeat(200)}RISK_SENTINEL`,
+          evidence: [],
+        },
+      ],
+      recommendations: [
+        { priority: 'low', title: 'Recomendação curta', rationale: 'Curta.' },
+        {
+          priority: 'high',
+          title: 'Recomendação omitida',
+          rationale: `${'longo '.repeat(200)}RECOMMENDATION_SENTINEL`,
+        },
+      ],
+      confidenceMatrix: [
+        {
+          information: 'Linha curta',
+          result: 'Detectado',
+          confidence: 'confirmed',
+          justification: 'Curta.',
+        },
+        {
+          information: 'Linha omitida',
+          result: 'Detectado',
+          confidence: 'probable',
+          justification: `${'longo '.repeat(200)}CONFIDENCE_SENTINEL`,
+        },
+      ],
+      technicalEvidence: {
+        ...reportFixture().technicalEvidence,
+        analyzedUrls: [
+          'https://example.test/safe',
+          `https://example.test/${'x'.repeat(700)}URL_SENTINEL`,
+        ],
+        relevantHeaders: { Server: 'nginx', 'X-Long-Safe': `${'y'.repeat(700)}HEADER_SENTINEL` },
+      },
+    });
+
+    const brief = new ReportNarrativeAssembler({ maxSectionChars: 500 }).assemble(report);
+
+    expect(brief.narrative).toContain('Risco curto');
+    expect(brief.narrative).toContain('Recomendação curta');
+    expect(brief.narrative).toContain('Linha curta');
+    expect(brief.narrative).toContain('https://example.test/safe');
+    expect(brief.narrative).toContain('Server: nginx');
+    expect(brief.narrative).not.toMatch(
+      /Risco omitido|Recomendação omitida|Linha omitida|RISK_SENTINEL|RECOMMENDATION_SENTINEL|CONFIDENCE_SENTINEL|URL_SENTINEL|HEADER_SENTINEL|\[truncado\]/,
+    );
+  });
+
+  it.each([
+    { maxNarrativeChars: Number.NaN },
+    { maxNarrativeChars: Number.POSITIVE_INFINITY },
+    { maxNarrativeChars: 0 },
+    { maxNarrativeChars: -1 },
+    { maxNarrativeChars: 1.5 },
+    { maxNarrativeChars: 100_001 },
+    { maxSectionChars: Number.NaN },
+    { maxSectionChars: Number.POSITIVE_INFINITY },
+    { maxSectionChars: 0 },
+    { maxSectionChars: -1 },
+    { maxSectionChars: 1.5 },
+    { maxSectionChars: 20_001 },
+  ])('rejects unsafe assembler option $maxNarrativeChars/$maxSectionChars', (options) => {
+    expect(() => new ReportNarrativeAssembler(options)).toThrow('INVALID_ASSEMBLER_OPTIONS');
+  });
+
+  it('does not mutate a deeply frozen investigation report', () => {
+    const report = deepFreeze(
+      reportFixture({
+        conclusion: 'Conclusão imutável.',
+        technicalEvidence: {
+          ...reportFixture().technicalEvidence,
+          analyzedUrls: ['https://example.test?api_key=secret&view=safe'],
+        },
+      }),
+    );
+    const snapshot = structuredClone(report);
+
+    assembler.assemble(report);
+
+    expect(report).toEqual(snapshot);
+  });
 });
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
 
 export { reportFixture };

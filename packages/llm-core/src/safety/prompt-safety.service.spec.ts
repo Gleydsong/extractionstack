@@ -45,4 +45,53 @@ describe('PromptSafetyService', () => {
     expect(Object.isFrozen(inspection)).toBe(true);
     expect(Object.isFrozen(inspection.reasonCodes)).toBe(true);
   });
+
+  it('redacts embedded curl headers, folded authorization, and quoted assignments', () => {
+    const inspection = safety.inspect(
+      [
+        `curl -H 'Authorization: Bearer curl-secret' https://example.test`,
+        'observed Proxy-Authorization: Basic first-line',
+        ' continuation-secret',
+        'password = "secret phrase with spaces" mode=readonly',
+      ].join('\n'),
+    );
+
+    expect(inspection.safeText).toContain('curl -H');
+    expect(inspection.safeText).toContain('https://example.test');
+    expect(inspection.safeText).toContain('mode=readonly');
+    expect(inspection.safeText).not.toMatch(
+      /curl-secret|first-line|continuation-secret|secret phrase|password\s*=/i,
+    );
+    expect(inspection.reasonCodes).toEqual(['SENSITIVE_HEADER_VALUE', 'SECRET_LIKE_VALUE']);
+  });
+
+  it('sanitizes URL userinfo and encoded secret query keys while preserving safe parameters', () => {
+    const inspection = safety.inspectUrl(
+      'https://alice:user-secret@example.test/items?view=compact&api%5Fkey=abc&access%2Dtoken=def&page=2',
+    );
+
+    expect(inspection.safeText).toBe('https://example.test/items?view=compact&page=2');
+    expect(JSON.stringify(inspection)).not.toMatch(/alice|user-secret|abc|def/);
+    expect(inspection.reasonCodes).toEqual(['SECRET_LIKE_VALUE']);
+  });
+
+  it('sanitizes a sensitive header by field name regardless of folded value', () => {
+    const inspection = safety.inspectHeader('Authorization', 'Bearer line-one\r\n line-two');
+
+    expect(inspection.safeText).toBe('Authorization: [REDACTED]');
+    expect(JSON.stringify(inspection)).not.toMatch(/line-one|line-two/);
+    expect(inspection.reasonCodes).toEqual(['SENSITIVE_HEADER_VALUE']);
+  });
+
+  it('normalizes and bounds header fields before rendering and blocks newline name bypasses', () => {
+    const sensitive = safety.inspectHeader('Authorization\r\nX-Other', 'Bearer hidden');
+    const safe = safety.inspectHeader('X-Build\r\nVariant', 'nginx\r\n safe');
+    const bounded = safety.inspectHeader(`X-${'n'.repeat(300)}`, 'safe');
+
+    expect(sensitive.safeText).toContain('[REDACTED]');
+    expect(sensitive.safeText).not.toContain('hidden');
+    expect(safe.safeText).toBe('X-Build Variant: nginx safe');
+    expect(bounded.safeText.length).toBeLessThanOrEqual(4_200);
+    expect(bounded.safeText).not.toContain('n'.repeat(300));
+  });
 });

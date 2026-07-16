@@ -75,4 +75,24 @@ describe('PromptComposer', () => {
     expect(composed.userTask).not.toContain('</untrusted_extraction_report>');
     expect(composed.sourceData.match(/<\/untrusted_extraction_report>/g)).toHaveLength(1);
   });
+
+  it('does not mutate a deeply frozen wizard input or source brief', () => {
+    const wizard = deepFreeze(wizardFixture({ technologies: ['React', 'TypeScript'] }));
+    const brief = deepFreeze(briefFixture('Relatório imutável.'));
+    const wizardSnapshot = structuredClone(wizard);
+    const briefSnapshot = structuredClone(brief);
+
+    composer.compose({ wizard, brief });
+
+    expect(wizard).toEqual(wizardSnapshot);
+    expect(brief).toEqual(briefSnapshot);
+  });
 });
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreeze(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
