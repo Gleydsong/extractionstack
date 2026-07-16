@@ -23,7 +23,12 @@ CREATE TABLE "AiConnection" (
   "lastUsedAt" TIMESTAMP(3),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL,
-  CONSTRAINT "AiConnection_pkey" PRIMARY KEY ("id")
+  CONSTRAINT "AiConnection_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "AiConnection_provider_credential_check" CHECK (
+    ("provider" = 'FAKE' AND "credentialMode" = 'PLATFORM_CREDITS') OR
+    ("provider" = 'OPENAI' AND "credentialMode" IN ('API_KEY', 'PLATFORM_CREDITS')) OR
+    ("provider" = 'GEMINI' AND "credentialMode" IN ('OAUTH', 'API_KEY', 'PLATFORM_CREDITS'))
+  )
 );
 
 CREATE TABLE "ProviderCredential" (
@@ -103,7 +108,12 @@ CREATE TABLE "PromptGenerationJob" (
   CONSTRAINT "PromptGenerationJob_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "PromptGenerationJob_attempts_check" CHECK ("attempts" >= 0 AND "attempts" <= 10),
   CONSTRAINT "PromptGenerationJob_maxAttempts_check" CHECK ("maxAttempts" >= 1 AND "maxAttempts" <= 10),
-  CONSTRAINT "PromptGenerationJob_attempt_bounds_check" CHECK ("attempts" <= "maxAttempts")
+  CONSTRAINT "PromptGenerationJob_attempt_bounds_check" CHECK ("attempts" <= "maxAttempts"),
+  CONSTRAINT "PromptGenerationJob_provider_credential_check" CHECK (
+    ("provider" = 'FAKE' AND "credentialMode" = 'PLATFORM_CREDITS') OR
+    ("provider" = 'OPENAI' AND "credentialMode" IN ('API_KEY', 'PLATFORM_CREDITS')) OR
+    ("provider" = 'GEMINI' AND "credentialMode" IN ('OAUTH', 'API_KEY', 'PLATFORM_CREDITS'))
+  )
 );
 
 CREATE TABLE "PromptPreview" (
@@ -145,7 +155,12 @@ CREATE TABLE "LlmUsage" (
   CONSTRAINT "LlmUsage_cachedTokens_check" CHECK ("cachedTokens" IS NULL OR "cachedTokens" >= 0),
   CONSTRAINT "LlmUsage_totalTokens_check" CHECK ("totalTokens" IS NULL OR "totalTokens" >= 0),
   CONSTRAINT "LlmUsage_estimatedAmountMinor_check" CHECK ("estimatedAmountMinor" IS NULL OR "estimatedAmountMinor" >= 0),
-  CONSTRAINT "LlmUsage_confirmedAmountMinor_check" CHECK ("confirmedAmountMinor" IS NULL OR "confirmedAmountMinor" >= 0)
+  CONSTRAINT "LlmUsage_confirmedAmountMinor_check" CHECK ("confirmedAmountMinor" IS NULL OR "confirmedAmountMinor" >= 0),
+  CONSTRAINT "LlmUsage_provider_credential_check" CHECK (
+    ("provider" = 'FAKE' AND "credentialMode" = 'PLATFORM_CREDITS') OR
+    ("provider" = 'OPENAI' AND "credentialMode" IN ('API_KEY', 'PLATFORM_CREDITS')) OR
+    ("provider" = 'GEMINI' AND "credentialMode" IN ('OAUTH', 'API_KEY', 'PLATFORM_CREDITS'))
+  )
 );
 
 CREATE TABLE "SecurityDecision" (
@@ -171,7 +186,15 @@ CREATE TABLE "CreditLedgerEntry" (
   "metadata" JSONB,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "CreditLedgerEntry_pkey" PRIMARY KEY ("id"),
-  CONSTRAINT "CreditLedgerEntry_amountMinor_check" CHECK ("amountMinor" > 0 AND "amountMinor" <= 1000000000000)
+  CONSTRAINT "CreditLedgerEntry_amount_bounds_check" CHECK (
+    "amountMinor" >= -1000000000000 AND "amountMinor" <= 1000000000000
+  ),
+  CONSTRAINT "CreditLedgerEntry_kind_sign_check" CHECK (
+    ("kind" IN ('GRANT', 'PURCHASE', 'REVERSAL') AND "amountMinor" > 0) OR
+    ("kind" = 'RESERVATION' AND "amountMinor" < 0) OR
+    ("kind" = 'CONFIRMATION') OR
+    ("kind" = 'ADJUSTMENT' AND "amountMinor" <> 0)
+  )
 );
 
 CREATE INDEX "AiConnection_ownerId_state_idx" ON "AiConnection"("ownerId", "state");
