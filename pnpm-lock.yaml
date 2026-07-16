@@ -251,6 +251,22 @@ importers:
 
   packages/eslint-config: {}
 
+  packages/llm-core:
+    dependencies:
+      '@extractionstack/shared':
+        specifier: workspace:*
+        version: link:../shared
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.1
+        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(terser@5.49.0)
+
   packages/shared:
     dependencies:
       zod:
