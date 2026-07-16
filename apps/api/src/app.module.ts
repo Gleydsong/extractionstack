@@ -7,6 +7,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
 import { ExtractionsModule } from './extractions/extractions.module.js';
 import { OperationsModule } from './operations/operations.module.js';
 import { AiConnectionsModule } from './ai-connections/ai-connections.module.js';
+import { CreditsModule } from './credits/credits.module.js';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { AiConnectionsModule } from './ai-connections/ai-connections.module.js';
     ExtractionsModule,
     OperationsModule,
     AiConnectionsModule,
+    CreditsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

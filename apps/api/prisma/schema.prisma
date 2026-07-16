@@ -386,6 +386,9 @@ model CreditLedgerEntry {
   amountMinor    BigInt
   currency       String               @db.VarChar(8)
   idempotencyKey String               @unique @db.VarChar(160)
+  reservationId  String?              @unique
+  reservation    CreditLedgerEntry?   @relation("CreditSettlement", fields: [reservationId], references: [id], onDelete: Restrict)
+  settlement     CreditLedgerEntry?   @relation("CreditSettlement")
   metadata       Json?
   createdAt      DateTime             @default(now())
 
