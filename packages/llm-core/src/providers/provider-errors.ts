@@ -1,3 +1,12 @@
+import { z } from 'zod';
+
+export const ProviderRequestIdSchema = z
+  .string()
+  .min(1)
+  .max(160)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+  .nullable();
+
 export const PROVIDER_FAILURE_CODES = [
   'AUTHENTICATION_FAILED',
   'AUTHORIZATION_FAILED',
@@ -22,13 +31,13 @@ export class ProviderFailure extends Error {
     options: Readonly<{
       retryable?: boolean;
       providerRequestId?: string | null;
-      cause?: unknown;
     }> = {},
   ) {
-    super(code, { cause: options.cause });
+    super(code);
     this.name = 'ProviderFailure';
     this.code = code;
     this.retryable = options.retryable ?? false;
-    this.providerRequestId = options.providerRequestId ?? null;
+    const providerRequestId = ProviderRequestIdSchema.safeParse(options.providerRequestId ?? null);
+    this.providerRequestId = providerRequestId.success ? providerRequestId.data : null;
   }
 }

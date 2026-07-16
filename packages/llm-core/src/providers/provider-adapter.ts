@@ -1,10 +1,18 @@
-import type {
-  CredentialMode,
-  LlmProvider,
-  PromptPreview,
-  PromptVersion,
-  PromptWizardInput,
+import {
+  CredentialModeSchema,
+  LlmProviderSchema,
+  PromptPreviewSchema,
+  PromptVersionSchema,
+  PromptWizardInputSchema,
+  ProviderAuthorizationSchema,
+  PublicIsoDateTimeSchema,
+  type CredentialMode,
+  type LlmProvider,
 } from '@extractionstack/shared';
+import { z } from 'zod';
+import { ProviderRequestIdSchema } from './provider-errors';
+
+export { ProviderRequestIdSchema } from './provider-errors';
 
 export type ProviderCapabilities = Readonly<{
   provider: LlmProvider;
@@ -31,80 +39,170 @@ export type PublicProviderCapabilities = Readonly<{
   supportsStructuredOutput: boolean;
   supportsCancellation: boolean;
   supportsCredentialRefresh: boolean;
-  oauthScopes: readonly string[];
   previewEligible: boolean;
   enabled: boolean;
   circuitBreakerOpen: boolean;
 }>;
 
-export type ResolvedProviderCredential = Readonly<{
-  mode: CredentialMode;
-  value: string;
-}>;
+const NaturalLanguageContentSchema = z.string().trim().min(1).max(100_000);
+const PreviewContentSchema = z.string().trim().min(1).max(50_000);
+const PreviewSummarySchema = z.string().trim().min(1).max(2_000);
+export const ResolvedProviderCredentialSchema = z
+  .object({
+    mode: CredentialModeSchema,
+    value: z.string().min(1).max(16_384),
+  })
+  .strict()
+  .readonly();
+export type ResolvedProviderCredential = z.infer<typeof ResolvedProviderCredentialSchema>;
 
-export type ValidateConnectionInput = Readonly<{
-  provider: LlmProvider;
-  credential: ResolvedProviderCredential;
-}>;
+function validateProviderCredential(
+  value: Readonly<{ provider: LlmProvider; credential: ResolvedProviderCredential }>,
+  context: z.RefinementCtx,
+): void {
+  const result = ProviderAuthorizationSchema.safeParse({
+    provider: value.provider,
+    credentialMode: value.credential.mode,
+  });
 
-export type ConnectionValidation = Readonly<{
-  valid: boolean;
-  expiresAt: string | null;
-  scopes: readonly string[];
-}>;
+  if (!result.success) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['credential', 'mode'],
+      message: 'Credential mode is not supported by provider',
+    });
+  }
+}
 
-export type PromptLayer = Readonly<{
-  kind:
-    | 'platform-policy'
-    | 'task'
-    | 'user-instructions'
-    | 'source-context'
-    | 'destination-rules'
-    | 'response-contract';
-  content: string;
-}>;
+export const ValidateConnectionInputSchema = z
+  .object({
+    provider: LlmProviderSchema,
+    credential: ResolvedProviderCredentialSchema,
+  })
+  .strict()
+  .superRefine(validateProviderCredential)
+  .readonly();
+export type ValidateConnectionInput = z.infer<typeof ValidateConnectionInputSchema>;
 
-export type GenerationInput = Readonly<{
-  provider: LlmProvider;
-  model: string;
-  credential: ResolvedProviderCredential;
-  wizardInput: PromptWizardInput;
-  sourcePrompt: PromptVersion | null;
-  layers: readonly PromptLayer[];
-  maxOutputTokens: number;
-}>;
+export const ConnectionValidationSchema = z
+  .object({
+    valid: z.boolean(),
+    expiresAt: PublicIsoDateTimeSchema.nullable(),
+    scopes: z.array(z.string().trim().min(1).max(160)).max(30).readonly(),
+  })
+  .strict()
+  .readonly();
+export type ConnectionValidation = z.infer<typeof ConnectionValidationSchema>;
 
-export type PreviewInput = Readonly<{
-  generation: GenerationInput;
-  preview: PromptPreview;
-}>;
+export const PromptLayerSchema = z
+  .object({
+    kind: z.enum([
+      'platform-policy',
+      'task',
+      'user-instructions',
+      'source-context',
+      'destination-rules',
+      'response-contract',
+    ]),
+    content: NaturalLanguageContentSchema,
+  })
+  .strict()
+  .readonly();
+export type PromptLayer = z.infer<typeof PromptLayerSchema>;
 
-export type NormalizedUsage = Readonly<{
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  estimatedCostMicros: number | null;
-}>;
+export const GenerationInputSchema = z
+  .object({
+    provider: LlmProviderSchema,
+    model: z.string().trim().min(1).max(128),
+    credential: ResolvedProviderCredentialSchema,
+    wizardInput: PromptWizardInputSchema,
+    sourcePrompt: PromptVersionSchema.nullable(),
+    layers: z.array(PromptLayerSchema).min(1).max(6).readonly(),
+    maxOutputTokens: z.number().int().positive().max(1_000_000),
+  })
+  .strict()
+  .superRefine(validateProviderCredential)
+  .readonly();
+export type GenerationInput = z.infer<typeof GenerationInputSchema>;
 
-export type UsageEstimate = Readonly<{
-  usage: NormalizedUsage;
-  pricingMetadataVersion: string;
-}>;
+export const PreviewInputSchema = z
+  .object({
+    generation: GenerationInputSchema,
+    preview: PromptPreviewSchema,
+  })
+  .strict()
+  .readonly();
+export type PreviewInput = z.infer<typeof PreviewInputSchema>;
 
-export type NormalizedGeneration = Readonly<{
-  content: string;
-  finishReason: 'complete' | 'length' | 'blocked';
-  providerRequestId: string | null;
-  usage: NormalizedUsage;
-}>;
+export const NormalizedUsageSchema = z
+  .object({
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    estimatedCostMicros: z.number().int().nonnegative().nullable(),
+  })
+  .strict()
+  .superRefine(({ inputTokens, outputTokens, totalTokens }, context) => {
+    if (totalTokens !== inputTokens + outputTokens) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['totalTokens'],
+        message: 'Total tokens must equal input plus output tokens',
+      });
+    }
+  })
+  .readonly();
+export type NormalizedUsage = z.infer<typeof NormalizedUsageSchema>;
 
-export type NormalizedPreview = Readonly<{
-  content: string;
-  summary: string;
-  finishReason: 'complete' | 'length' | 'blocked';
-  providerRequestId: string | null;
-  usage: NormalizedUsage;
-}>;
+export const UsageEstimateSchema = z
+  .object({
+    usage: NormalizedUsageSchema,
+    pricingMetadataVersion: z.string().trim().min(1).max(64),
+  })
+  .strict()
+  .readonly();
+export type UsageEstimate = z.infer<typeof UsageEstimateSchema>;
+
+export const NormalizedFinishReasonSchema = z.enum(['complete', 'length', 'blocked']);
+
+export const NormalizedGenerationSchema = z
+  .object({
+    content: NaturalLanguageContentSchema,
+    finishReason: NormalizedFinishReasonSchema,
+    providerRequestId: ProviderRequestIdSchema,
+    usage: NormalizedUsageSchema,
+  })
+  .strict()
+  .readonly();
+export type NormalizedGeneration = z.infer<typeof NormalizedGenerationSchema>;
+
+export const NormalizedPreviewSchema = z
+  .object({
+    content: PreviewContentSchema,
+    summary: PreviewSummarySchema,
+    finishReason: NormalizedFinishReasonSchema,
+    providerRequestId: ProviderRequestIdSchema,
+    usage: NormalizedUsageSchema,
+  })
+  .strict()
+  .readonly();
+export type NormalizedPreview = z.infer<typeof NormalizedPreviewSchema>;
+
+export const parseValidateConnectionInput = (input: unknown): ValidateConnectionInput =>
+  ValidateConnectionInputSchema.parse(input);
+export const parseConnectionValidation = (input: unknown): ConnectionValidation =>
+  ConnectionValidationSchema.parse(input);
+export const parseGenerationInput = (input: unknown): GenerationInput =>
+  GenerationInputSchema.parse(input);
+export const parsePreviewInput = (input: unknown): PreviewInput => PreviewInputSchema.parse(input);
+export const parseNormalizedUsage = (input: unknown): NormalizedUsage =>
+  NormalizedUsageSchema.parse(input);
+export const parseUsageEstimate = (input: unknown): UsageEstimate =>
+  UsageEstimateSchema.parse(input);
+export const parseNormalizedGeneration = (input: unknown): NormalizedGeneration =>
+  NormalizedGenerationSchema.parse(input);
+export const parseNormalizedPreview = (input: unknown): NormalizedPreview =>
+  NormalizedPreviewSchema.parse(input);
 
 export interface LlmProviderAdapter {
   readonly provider: LlmProvider;
