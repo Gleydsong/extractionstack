@@ -185,6 +185,68 @@ describePostgres('CreditsRepository PostgreSQL integration', () => {
     expect(after).toEqual(before);
     expect(await prisma.creditLedgerEntry.count({ where: { ownerId } })).toBe(3);
   });
+
+  it('rejects direct update and delete of every ledger entry with a stable constraint error', async () => {
+    await expectAppendOnlyRejection(
+      prisma.creditLedgerEntry.update({
+        where: { id: (await prisma.creditLedgerEntry.findFirstOrThrow({ where: { ownerId } })).id },
+        data: { amountMinor: 999n },
+      }),
+    );
+    await expectAppendOnlyRejection(
+      prisma.creditLedgerEntry.delete({ where: { id: (await createFixture(prisma)).grantId } }),
+    );
+  });
+
+  it('rejects owner, job, currency, and kind mutation of a settled reservation', async () => {
+    const reservation = await service.reserve(ownerId, jobIds[0], 100n, 'immutable-settled');
+    await service.confirm(reservation.id, 90n);
+    const other = await createFixture(prisma);
+
+    await expectAppendOnlyRejection(
+      prisma.creditLedgerEntry.update({
+        where: { id: reservation.id },
+        data: {
+          ownerId: other.ownerId,
+          jobId: other.jobIds[0],
+          currency: 'USD',
+          kind: 'GRANT',
+        },
+      }),
+    );
+    expect(
+      await prisma.creditLedgerEntry.findUniqueOrThrow({ where: { id: reservation.id } }),
+    ).toMatchObject({
+      ownerId,
+      jobId: jobIds[0],
+      currency: 'CREDITS',
+      kind: 'RESERVATION',
+    });
+  });
+
+  it('cannot commit an inconsistent pair when settlement races a target update', async () => {
+    const reservation = await service.reserve(ownerId, jobIds[0], 100n, 'settlement-update-race');
+    const outcomes = await Promise.allSettled([
+      service.confirm(reservation.id, 90n),
+      prisma.creditLedgerEntry.update({
+        where: { id: reservation.id },
+        data: { currency: 'USD' },
+      }),
+    ]);
+
+    expect(outcomes[0]).toMatchObject({ status: 'fulfilled' });
+    expect(outcomes[1]).toMatchObject({ status: 'rejected' });
+    if (outcomes[1]?.status !== 'rejected') throw new Error('expected target update rejection');
+    expectAppendOnlyError(outcomes[1].reason);
+    expect(
+      await prisma.creditLedgerEntry.findUniqueOrThrow({ where: { id: reservation.id } }),
+    ).toMatchObject({
+      currency: 'CREDITS',
+    });
+    expect(await prisma.creditLedgerEntry.count({ where: { reservationId: reservation.id } })).toBe(
+      1,
+    );
+  });
 });
 
 async function createFixture(
@@ -248,4 +310,19 @@ async function ledgerCount(
   kind: 'RESERVATION',
 ): Promise<number> {
   return prisma.creditLedgerEntry.count({ where: { ownerId, kind } });
+}
+
+async function expectAppendOnlyRejection(operation: Promise<unknown>): Promise<void> {
+  try {
+    await operation;
+    throw new Error('expected append-only rejection');
+  } catch (error) {
+    expectAppendOnlyError(error);
+  }
+}
+
+function expectAppendOnlyError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  expect(message).toContain('code: "23514"');
+  expect(message).toContain('credit ledger entries are append-only');
 }

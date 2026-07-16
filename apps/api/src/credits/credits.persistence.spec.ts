@@ -11,6 +11,10 @@ describe('credit settlement persistence invariants', () => {
       join(prismaRoot, 'migrations/20260717020000_add_credit_settlement/migration.sql'),
       'utf8',
     );
+    const appendOnlyMigration = readFileSync(
+      join(prismaRoot, 'migrations/20260717030000_make_credit_ledger_append_only/migration.sql'),
+      'utf8',
+    );
 
     const model = schema.match(/model CreditLedgerEntry \{[\s\S]*?\n\}/)?.[0] ?? '';
     expect(model).toMatch(/reservationId\s+String\?\s+@unique/);
@@ -20,5 +24,9 @@ describe('credit settlement persistence invariants', () => {
     expect(migration).toContain('"CreditLedgerEntry_settlement_scope_check"');
     expect(migration).toContain('CREATE CONSTRAINT TRIGGER');
     expect(migration).toContain('FOREIGN KEY ("reservationId")');
+    expect(appendOnlyMigration).toContain('"CreditLedgerEntry_append_only_check"');
+    expect(appendOnlyMigration).toContain('BEFORE UPDATE OR DELETE');
+    expect(appendOnlyMigration).toContain('FOR KEY SHARE');
+    expect(appendOnlyMigration).toContain('CREATE OR REPLACE FUNCTION');
   });
 });

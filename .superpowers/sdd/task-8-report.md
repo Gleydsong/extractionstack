@@ -121,3 +121,88 @@ An independent review requested database-level target/scope enforcement; this wa
 The review also suggested reserving the accepted maximum instead of the estimate. That suggestion was not applied because it conflicts with the binding ledger semantics for this task: `RESERVATION` is the negative estimated amount and `CONFIRMATION` is `estimate - actual`, explicitly allowing a negative delta. The accepted maximum remains a consent/cost ceiling, while concurrent reservation overspend is evaluated from the signed estimated reservations as specified.
 
 The follow-up review withdrew that finding under the binding semantics and reported no remaining blocking findings.
+
+## Controller Review Follow-up: Resolved After Temporary Block
+
+Status: **RESOLVED — PostgreSQL validation resumed and completed before commit.**
+
+The controller review requested database-enforced append-only retention and stronger settlement locking. The follow-up contains:
+
+- migration `20260717030000_make_credit_ledger_append_only` with a `BEFORE UPDATE OR DELETE` trigger that raises stable constraint `CreditLedgerEntry_append_only_check`;
+- `CREATE OR REPLACE` of the settlement validation function with `FOR KEY SHARE` on the referenced reservation;
+- PostgreSQL integration cases for direct ledger update/delete rejection, settled-reservation owner/job/currency/kind mutation rejection, and settlement-versus-target-update concurrency;
+- static persistence assertions for the append-only trigger and row lock.
+
+### Follow-up TDD evidence
+
+The persistence test was observed RED because the new migration did not exist:
+
+```text
+credits.persistence.spec.ts: 1 failed
+ENOENT .../20260717030000_make_credit_ledger_append_only/migration.sql
+```
+
+After adding the migration, the safe static/default checks were GREEN:
+
+- `pnpm --filter @extractionstack/api test -- credits.persistence.spec.ts`: 1/1 passed.
+- API lint: exit 0.
+- API typecheck: exit 0.
+- Default credits suite: 9 passed, 13 PostgreSQL tests skipped.
+- API build: exit 0.
+- `pnpm verify`: exit 0; API default suite reported 199 passed and 16 PostgreSQL tests skipped across integration suites.
+- `git diff --check`: exit 0.
+
+### Historical blocking condition
+
+At that checkpoint, the required fresh PostgreSQL reset/migration and the 13 real credits integration tests could not be run. Docker escalation was rejected by the platform usage-limit policy, and the coordinator explicitly prohibited workarounds. Therefore the SQL trigger behavior, stable Prisma constraint mapping, row-lock race, and fresh migration chain were not yet verified.
+
+Per coordinator instruction, these follow-up changes remained uncommitted until a later session with PostgreSQL access could run:
+
+```bash
+DATABASE_URL=<isolated-postgresql-url> \
+  pnpm --filter @extractionstack/api exec prisma migrate reset --force
+
+TEST_DATABASE_URL=<isolated-postgresql-url> \
+  pnpm --filter @extractionstack/api test -- credits
+```
+
+The existing `TEST_DATABASE_URL` CI gap remained a Minor concern owned by Task 16; no CI service was added here.
+
+### Resumed isolated PostgreSQL evidence
+
+PostgreSQL access was restored in a later turn. Validation used the unique database `task8_append_61855b0_a7f3c9` in the worktree's existing PostgreSQL 16 Compose service; the developer database was not reset or modified.
+
+Creation and fresh migration result:
+
+```text
+6 migrations found
+20260714161343_init applied
+20260715000100_jobs_reports applied
+20260716120000_add_llm_prompt_generation applied
+20260717010000_add_mutation_idempotency applied
+20260717020000_add_credit_settlement applied
+20260717030000_make_credit_ledger_append_only applied
+All migrations have been successfully applied.
+```
+
+The first real PostgreSQL run produced the expected diagnostic cycle: 10 tests passed and 3 new append-only tests failed because Prisma 5 preserved SQLSTATE `23514` and the stable database message but did not expose the PostgreSQL `CONSTRAINT` field in its JavaScript error text. The tests were corrected to assert the observable stable contract (`code: "23514"` and `credit ledger entries are append-only`) without changing the trigger.
+
+Fresh focused results after that correction:
+
+- `TEST_DATABASE_URL=... pnpm --filter @extractionstack/api test -- credits.repository.integration.spec.ts`: 13/13 passed.
+- `TEST_DATABASE_URL=... pnpm --filter @extractionstack/api test -- credits`: 3 files passed, 22/22 tests passed, 0 skipped.
+- Existing reservation, confirmation, reversal, balance, idempotency, rollback, and settlement-race flows remained green.
+- New direct update/delete, post-settlement scope mutation, and concurrent settlement-versus-update cases passed.
+
+Final verification:
+
+- API lint: exit 0.
+- API typecheck: exit 0.
+- API default tests: 29 files passed, 199 tests passed; 16 PostgreSQL tests skipped in the default environment and exercised separately where owned by this task.
+- API build: exit 0.
+- `pnpm verify`: exit 0 across monorepo lint, typecheck, tests, and builds.
+- Prettier, `prisma format`, and `git diff --check`: exit 0.
+
+Cleanup: only `task8_append_61855b0_a7f3c9` was dropped after validation. The Compose PostgreSQL service and developer data were left intact.
+
+Residual concern: the default `TEST_DATABASE_URL` CI gap remains Minor and owned by Task 16; no CI service was added in this follow-up.
