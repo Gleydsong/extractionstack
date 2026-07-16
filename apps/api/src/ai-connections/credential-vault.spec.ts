@@ -81,6 +81,23 @@ describe('CredentialVault', () => {
     expect(() => createVault('not-base64!')).toThrow('CREDENTIAL_VAULT_CONFIGURATION_INVALID');
   });
 
+  it('rejects an oversized master key with a bounded safe configuration error', () => {
+    const oversized = `${'A'.repeat(100_000)}oversized-secret-marker`;
+    let failure: unknown;
+
+    try {
+      createVault(oversized);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(CredentialVaultError);
+    expect(failure).toMatchObject({ code: 'CREDENTIAL_VAULT_CONFIGURATION_INVALID' });
+    expect(failure).not.toHaveProperty('cause');
+    expect(String(failure)).not.toContain('oversized-secret-marker');
+    expect(JSON.stringify(failure)).not.toContain('oversized-secret-marker');
+  });
+
   it('does not include plaintext or the master key in serialized vault data', async () => {
     const vault = createVault();
     const envelope = await vault.encrypt('owner-a', 'OPENAI', 'sk-secret');

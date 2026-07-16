@@ -1,18 +1,14 @@
 import { z } from 'zod';
+import { isCanonicalCredentialMasterKey } from './credential-master-key.js';
 
 const booleanString = z
   .enum(['true', 'false'])
   .default('false')
   .transform((value) => value === 'true');
 
-const base64Encoded32Bytes = z.string().refine((value) => {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
-    return false;
-  }
-
-  const decoded = Buffer.from(value, 'base64');
-  return decoded.length === 32 && decoded.toString('base64') === value;
-}, 'must be a base64-encoded 32-byte key');
+const base64Encoded32Bytes = z
+  .string()
+  .refine(isCanonicalCredentialMasterKey, 'must be a base64-encoded 32-byte key');
 
 const modelAllowlist = (fallback: string) =>
   z

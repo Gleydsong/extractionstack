@@ -74,6 +74,21 @@ describe('loadRuntimeEnv', () => {
     expect(JSON.stringify(failure)).not.toContain(rejectedSecret);
   });
 
+  it('rejects an oversized master key without echoing it in validation errors', () => {
+    const oversized = `${'A'.repeat(100_000)}oversized-secret-marker`;
+    let failure: unknown;
+
+    try {
+      loadRuntimeEnv({ ...productionBase, LLM_CREDENTIAL_MASTER_KEY: oversized });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeDefined();
+    expect(String(failure)).not.toContain('oversized-secret-marker');
+    expect(JSON.stringify(failure)).not.toContain('oversized-secret-marker');
+  });
+
   it.each([
     { LLM_CREDENTIAL_MASTER_KEY: '' },
     { LLM_CREDENTIAL_MASTER_KEY: Buffer.alloc(31).toString('base64') },

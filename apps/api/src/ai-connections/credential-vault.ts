@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import type { LlmProvider } from '@extractionstack/shared';
+import { decodeCanonicalCredentialMasterKey } from '../common/credential-master-key.js';
 
 const ALGORITHM = 'AES-256-GCM' as const;
 const AES_256_KEY_BYTES = 32;
@@ -163,7 +164,10 @@ export class CredentialVault {
   constructor(masterKeyBase64: string, keyVersion: string) {
     try {
       assertEncryptionContext('configuration-check', 'FAKE', keyVersion);
-      this.#masterKey = decodeBase64(masterKeyBase64, AES_256_KEY_BYTES);
+      const masterKey = decodeCanonicalCredentialMasterKey(masterKeyBase64);
+      if (!masterKey) throw new Error('invalid master key');
+
+      this.#masterKey = masterKey;
       this.#keyVersion = keyVersion;
     } catch {
       throw new CredentialVaultError('CREDENTIAL_VAULT_CONFIGURATION_INVALID');
