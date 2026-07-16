@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { EvidenceSchema, type Evidence } from './common.js';
+import { InvestigationReportSchema } from './investigation.js';
 
 export const DimensionSchema = z.enum([
   'cssFramework',
@@ -35,13 +36,15 @@ export const DimensionSchema = z.enum([
 ]);
 export type Dimension = z.infer<typeof DimensionSchema>;
 
-export const ExtractRequestSchema = z.object({
-  url: z
-    .string()
-    .url({ message: 'must be a valid http(s) URL' })
-    .max(2048)
-    .refine((u) => /^https?:\/\//i.test(u), 'only http(s) URLs are allowed'),
-}).strict();
+export const ExtractRequestSchema = z
+  .object({
+    url: z
+      .string()
+      .url({ message: 'must be a valid http(s) URL' })
+      .max(2048)
+      .refine((u) => /^https?:\/\//i.test(u), 'only http(s) URLs are allowed'),
+  })
+  .strict();
 export type ExtractRequest = z.infer<typeof ExtractRequestSchema>;
 
 export const NetworkEntrySchema = z.object({
@@ -160,5 +163,6 @@ export const ExtractionReportSchema = z.object({
   fetchedAt: z.string().datetime(),
   durationMs: z.number().int().nonnegative(),
   sections: z.record(DetectorResultSchema),
+  investigation: InvestigationReportSchema.optional(),
 });
 export type ExtractionReport = z.infer<typeof ExtractionReportSchema>;

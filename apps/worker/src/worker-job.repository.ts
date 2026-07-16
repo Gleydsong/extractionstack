@@ -1,11 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ExtractionReportSchema, type ExtractionReport } from '@extractionstack/shared';
-import type { Prisma, PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
 import type { ClaimedExtractionJob, WorkerJobStore } from './worker.types.js';
 
 @Injectable()
 export class WorkerJobRepository implements WorkerJobStore {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(@Inject(PrismaClient) private readonly prisma: PrismaClient) {}
 
   async claim(jobId: string): Promise<ClaimedExtractionJob | null> {
     await this.prisma.extractionJob.updateMany({
@@ -26,8 +26,18 @@ export class WorkerJobRepository implements WorkerJobStore {
 
   async complete(jobId: string, rawReport: ExtractionReport): Promise<void> {
     const report = ExtractionReportSchema.parse(rawReport);
-    await this.prisma.$transaction([
-      this.prisma.extractionReport.upsert({
+    await this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.extractionJob.updateMany({
+        where: { id: jobId, status: 'RUNNING' },
+        data: {
+          status: 'SUCCEEDED',
+          errorCode: null,
+          errorMessage: null,
+          finishedAt: new Date(),
+        },
+      });
+      if (updated.count !== 1) return;
+      await transaction.extractionReport.upsert({
         where: { jobId },
         create: {
           jobId,
@@ -42,17 +52,8 @@ export class WorkerJobRepository implements WorkerJobStore {
           durationMs: report.durationMs,
           payload: report as Prisma.InputJsonValue,
         },
-      }),
-      this.prisma.extractionJob.update({
-        where: { id: jobId },
-        data: {
-          status: 'SUCCEEDED',
-          errorCode: null,
-          errorMessage: null,
-          finishedAt: new Date(),
-        },
-      }),
-    ]);
+      });
+    });
   }
 
   async retry(jobId: string, code: string, message: string): Promise<void> {

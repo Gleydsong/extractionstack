@@ -2,7 +2,7 @@ import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import type { Queue } from 'bullmq';
 import type { ExtractionQueuePort } from './extractions.types.js';
 
-export const EXTRACTION_QUEUE_NAME = 'extractions:v1';
+export const EXTRACTION_QUEUE_NAME = 'extractions-v1';
 export const EXTRACTION_BULL_QUEUE = Symbol('EXTRACTION_BULL_QUEUE');
 
 export interface ExtractionQueuePayload {

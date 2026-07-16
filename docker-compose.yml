@@ -1,21 +1,91 @@
+x-app-environment: &app-environment
+  NODE_ENV: development
+  DATABASE_URL: postgresql://extractionstack:extractionstack@postgres:5432/extractionstack?schema=public
+  REDIS_URL: redis://redis:6379
+  AUTH_DEV_MODE: 'true'
+  VITE_AUTH_DEV_MODE: 'true'
+  AUTH0_DOMAIN: local.invalid
+  AUTH0_AUDIENCE: https://api.extractionstack.local
+  CORS_ORIGIN: http://localhost:5173,http://localhost:8080
+  API_PORT: '3001'
+  LOG_LEVEL: info
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: extractionstack-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: extractionstack
       POSTGRES_PASSWORD: extractionstack
       POSTGRES_DB: extractionstack
-    ports:
-      - "5432:5432"
-    volumes:
-      - extractionstack-pgdata:/var/lib/postgresql/data
+    ports: ['5432:5432']
+    volumes: ['extractionstack-pgdata:/var/lib/postgresql/data']
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U extractionstack -d extractionstack"]
+      test: ['CMD-SHELL', 'pg_isready -U extractionstack -d extractionstack']
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports: ['6379:6379']
+    volumes: ['extractionstack-redisdata:/data']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: { context: ., target: api }
+    environment: *app-environment
+    command: ['pnpm', '--filter', '@extractionstack/api', 'exec', 'prisma', 'migrate', 'deploy']
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: 'no'
+
+  api:
+    build: { context: ., target: api }
+    restart: unless-stopped
+    environment: *app-environment
+    ports: ['3001:3001']
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build: { context: ., target: worker }
+    restart: unless-stopped
+    environment: *app-environment
+    depends_on:
+      api: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    init: true
+
+  web:
+    build:
+      context: .
+      target: web
+      args:
+        VITE_API_BASE_URL: ''
+        VITE_AUTH_DEV_MODE: 'true'
+    restart: unless-stopped
+    ports: ['8080:80']
+    depends_on:
+      api: { condition: service_healthy }
 
 volumes:
   extractionstack-pgdata:
+  extractionstack-redisdata:

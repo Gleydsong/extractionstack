@@ -13,5 +13,5 @@
     "esModuleInterop": true,
     "target": "ES2022"
   },
-  "include": ["src/**/*", "test/**/*"]
+  "include": ["src/**/*"]
 }

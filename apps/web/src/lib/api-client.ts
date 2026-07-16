@@ -26,7 +26,7 @@ export class ExtractionApiClient {
 
   constructor(
     private readonly getAccessToken: () => Promise<string>,
-    private readonly fetcher: typeof fetch = fetch,
+    private readonly fetcher: typeof fetch = (input, init) => globalThis.fetch(input, init),
     baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '',
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
@@ -57,11 +57,9 @@ export class ExtractionApiClient {
   }
 
   cancelJob(id: string): Promise<ExtractionJob> {
-    return this.request(
-      `/api/extractions/${encodeURIComponent(id)}/cancel`,
-      ExtractionJobSchema,
-      { method: 'POST' },
-    );
+    return this.request(`/api/extractions/${encodeURIComponent(id)}/cancel`, ExtractionJobSchema, {
+      method: 'POST',
+    });
   }
 
   private async request<T>(

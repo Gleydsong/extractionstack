@@ -1,4 +1,10 @@
-import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import IORedis from 'ioredis';
 import { loadRuntimeEnv } from '../../api/src/common/runtime-env.js';
@@ -6,7 +12,7 @@ import {
   EXTRACTION_QUEUE_NAME,
   type ExtractionQueuePayload,
 } from '../../api/src/extractions/extraction-queue.js';
-import type { WorkerProcessor } from './worker.processor.js';
+import { WorkerProcessor } from './worker.processor.js';
 
 @Injectable()
 export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
@@ -14,7 +20,7 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
   private connection: IORedis | null = null;
   private worker: Worker<ExtractionQueuePayload> | null = null;
 
-  constructor(private readonly processor: WorkerProcessor) {}
+  constructor(@Inject(WorkerProcessor) private readonly processor: WorkerProcessor) {}
 
   onModuleInit(): void {
     const env = loadRuntimeEnv(process.env);
@@ -22,15 +28,15 @@ export class QueueWorkerService implements OnModuleInit, OnModuleDestroy {
     this.worker = new Worker<ExtractionQueuePayload>(
       EXTRACTION_QUEUE_NAME,
       (job: Job<ExtractionQueuePayload>) =>
-        this.processor.process(
-          job.data.jobId,
-          job.attemptsMade + 1,
-          job.opts.attempts ?? 1,
-        ),
+        this.processor.process(job.data.jobId, job.attemptsMade + 1, job.opts.attempts ?? 1),
       { connection: this.connection, concurrency: env.WORKER_CONCURRENCY },
     );
     this.worker.on('completed', (job) => this.logger.log(`job completed id=${job.id}`));
-    this.worker.on('failed', (job) => this.logger.warn(`job failed id=${job?.id ?? 'unknown'}`));
+    this.worker.on('failed', (job, error) =>
+      this.logger.warn(
+        `job failed id=${job?.id ?? 'unknown'} errorType=${error.name || 'Error'}`,
+      ),
+    );
     this.worker.on('error', () => this.logger.error('queue worker error'));
   }
 

@@ -28,7 +28,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['@extractionstack/shared'],
+    exclude: ['@extractionstack/shared'],
   },
   build: {
     commonjsOptions: {

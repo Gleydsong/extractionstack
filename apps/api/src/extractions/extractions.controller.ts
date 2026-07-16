@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Inject,
   Param,
   Post,
   Query,
@@ -27,7 +28,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
-import type { ExtractionsService } from './extractions.service.js';
+import { ExtractionsService } from './extractions.service.js';
 
 interface AuthenticatedRequest {
   user: Auth0User;
@@ -37,7 +38,7 @@ interface AuthenticatedRequest {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('user', 'admin')
 export class ExtractionsController {
-  constructor(private readonly service: ExtractionsService) {}
+  constructor(@Inject(ExtractionsService) private readonly service: ExtractionsService) {}
 
   @Post()
   @HttpCode(202)

@@ -1,110 +1,78 @@
 # ExtractionStack
 
-Analyze a live URL and produce a structured report describing the target's technology stack: CSS framework, design tokens, typography, grid, animations, SEO, performance, component architecture, icons, and more.
+Aplicação full-stack que recebe uma URL pública, executa uma análise assíncrona em Chromium e persiste um relatório técnico com evidências sobre front-end, back-end, design, performance, segurança e infraestrutura. Cada conclusão é classificada como confirmada, altamente provável, provável, não identificada ou não aplicável.
 
-## Status
+## Arquitetura
 
-v0.2 — full extractor. Backend, frontend, **29 detectors** (15 frontend/UI + 14 backend/infra), and docs are in place. Every detector returns **evidence + confidence** (high/medium/low) showing the snippet that triggered detection.
+- React/Vite: dashboard, histórico, polling e cancelamento.
+- NestJS: autenticação/RBAC, contratos Zod, ownership, idempotência e API de jobs.
+- BullMQ/Redis: fila, retry e concorrência controlada.
+- Worker/Playwright: navegação isolável, guardrails SSRF e 29 detectores.
+- PostgreSQL/Prisma: jobs, relatórios e auditoria.
+- Operação: logs JSON correlacionados, health/readiness, métricas Prometheus, CI e Docker Compose.
 
-Backend, frontend, detectors, and docs are in place; running it end-to-end requires:
+## Relatório de investigação
 
-- Auth0 tenant (backend and frontend env vars) — bypassable locally with `AUTH_DEV_MODE=true`
-- Postgres (via `docker compose up -d`)
-- Playwright Chromium download (`pnpm --filter @extractionstack/api exec playwright install chromium`)
+O relatório reúne reconhecimento geral, tabela de tecnologias, frontend, design system, backend observável, APIs, autenticação e segurança, CMS, infraestrutura, integrações, performance, SEO, acessibilidade, diagrama Mermaid, estrutura estimada, riscos, recomendações, matriz final de confiança e inventário técnico das evidências.
 
-See `docs/ARCHITECTURE.md` for the module map and `docs/superpowers/specs/2026-07-14-extractionstack-design.md` for the full design.
+A investigação é passiva e limitada a recursos públicos carregados pela URL analisada. Banco de dados, serviços internos, código-fonte e configuração privada permanecem como `não identificado` quando não existe evidência direta; o sistema não tenta autenticar, explorar vulnerabilidades ou contornar controles de acesso.
 
-## Detectors (29 sections per report)
+## Subir localmente
 
-**Frontend/UI (15):** `cssFramework`, `cssCustomization`, `designSystem`, `typography`, `responsive` (merged with grid), `animation`, `scrollAnimation`, `transition`, `seo`, `performance`, `componentArchitecture`, `designTokens`, `palette`, `icons`, plus the merged `gridSystem` data inside `responsive`.
-
-**Backend/Infra (14):** `backendFramework`, `language`, `libraries`, `stateManagement`, `routing`, `authProvider`, `apisConsumed`, `thirdPartyServices`, `analytics`, `cdn`, `cloudProvider`, `reverseProxy`, `databaseIndicators`, `dockerKubernetes`, `architecture`.
-
-Each `ok` result includes an `evidence[]` array with `{source, snippet, confidence, note?}` — the actual URL, header line, or HTML chunk that triggered the hit, plus a high/medium/low confidence badge.
-
-## Auth0 setup (v1 contract)
-
-The backend looks for the role claim at the **namespaced** path `https://extractionstack/roles`. Add an Action in your Auth0 tenant (post-login trigger) that emits the claim:
-
-```js
-exports.onExecutePostLogin = async (event, api) => {
-  const roles = event.authorization?.roles ?? [];
-  api.idToken.setCustomClaim('https://extractionstack/roles', roles);
-  api.accessToken.setCustomClaim('https://extractionstack/roles', roles);
-};
-```
-
-In your Auth0 API settings, define a permission (e.g. `extract:run`) and assign roles `user` and `admin` to it. The backend's `RolesGuard` will accept either role for the `/api/extract` endpoint. Add a stricter `Roles('admin')` decorator on a future admin route when you have one.
-
-## Stack
-
-- **Frontend:** React 18, Vite, React Router, `@auth0/auth0-react`
-- **Backend:** NestJS 10, Prisma 5, Auth0 RS256 (Passport JWT + jwks-rsa), Playwright Chromium, Zod, Helmet, Throttler
-- **DB:** PostgreSQL 16 (Docker)
-- **Monorepo:** pnpm workspaces, TypeScript 5
-
-## Quickstart
+Modo mais simples, com toda a stack em containers:
 
 ```bash
-# 1. Install
+docker compose up --build -d
+docker compose ps
+```
+
+Abra `http://localhost:8080`. API: `http://localhost:3001`; liveness: `/health/live`; readiness: `/health/ready`; métricas: `/metrics`.
+
+Para desenvolvimento com Node local:
+
+```bash
 pnpm install
-
-# 2. Postgres
-docker compose up -d
-
-# 3. Env
+docker compose up -d postgres redis
 cp .env.example .env
-# fill in AUTH0_* and VITE_AUTH0_* values
-
-# 4. Prisma
 pnpm prisma:generate
 pnpm prisma:migrate
-
-# 5. Playwright browser
 pnpm --filter @extractionstack/api exec playwright install chromium
-
-# 6. Dev
 pnpm dev
-# api: http://localhost:3001
-# web: http://localhost:5173
 ```
 
-## Layout
+O bypass `AUTH_DEV_MODE=true` existe apenas para desenvolvimento e é rejeitado quando `NODE_ENV=production`.
 
-```
-extractionstack/
-├── apps/
-│   ├── api/                NestJS
-│   └── web/                React + Vite
-├── packages/
-│   ├── shared/             Zod schemas + types (single source of contract)
-│   └── eslint-config/
-├── docs/
-│   ├── plan.md             Original idea
-│   ├── ARCHITECTURE.md     Module map
-│   ├── decisions/          ADRs
-│   └── superpowers/specs/  Design + planning artifacts
-├── docker-compose.yml
-└── README.md
+## API assíncrona
+
+- `POST /api/extractions` — cria job; exige `Idempotency-Key`.
+- `GET /api/extractions` — histórico paginado do usuário.
+- `GET /api/extractions/:id` — estado e relatório persistido.
+- `POST /api/extractions/:id/cancel` — solicita cancelamento.
+
+## Qualidade
+
+```bash
+pnpm verify       # lint + typecheck + unitários + builds
+pnpm test:e2e     # contrato HTTP Nest + fluxos Chromium
 ```
 
-## Scripts
+## Documentação operacional
 
-| Command | Description |
-| --- | --- |
-| `pnpm dev` | Run api and web in parallel |
-| `pnpm dev:api` / `pnpm dev:web` | Run only one |
-| `pnpm build` | Build all workspaces |
-| `pnpm typecheck` | TypeScript check |
-| `pnpm lint` | Lint |
-| `pnpm test` | Unit tests (Vitest) |
-| `pnpm prisma:generate` | Generate Prisma client |
-| `pnpm prisma:migrate` | Apply migrations (dev) |
+- [Maturidade e roadmap](docs/operations/production-readiness.md)
+- [Modelo de segurança](docs/security/security-model.md)
+- [Contrato do relatório e cobertura](docs/product/investigation-report.md)
+- [Runbook de incidentes](docs/runbooks/incident-response.md)
+- [Arquitetura](docs/ARCHITECTURE.md)
 
-## Architecture principles
+## Estrutura
 
-SOLID, YAGNI, KISS, DRY. See `docs/decisions/` for the ADRs that put these into practice.
+```text
+apps/api       API NestJS
+apps/worker    consumidor BullMQ + crawler
+apps/web       React/Vite
+packages/shared contratos Zod e tipos
+e2e            testes browser Playwright
+ops            configuração de runtime
+```
 
-## License
-
-UNLICENSED — internal project.
+Licença: UNLICENSED — projeto interno.

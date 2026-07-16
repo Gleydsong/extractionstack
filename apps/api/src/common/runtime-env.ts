@@ -31,6 +31,7 @@ const RuntimeEnvBaseSchema = z.object({
   THROTTLE_TTL_SECONDS: z.coerce.number().int().min(1).max(3_600).default(60),
   THROTTLE_LIMIT: z.coerce.number().int().min(1).max(10_000).default(10),
   METRICS_TOKEN: z.string().min(16).max(256).optional(),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 
 export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {

@@ -1,6 +1,6 @@
 # 0005 — Sync single-page extraction
 
-- Status: Accepted
+- Status: Superseded by ADR 0007
 - Date: 2026-07-14
 
 ## Context

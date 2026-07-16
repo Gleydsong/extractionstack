@@ -66,10 +66,19 @@ type DetectorResult<T> =
   | { dimension: Dimension; status: 'error'; error: string };
 
 type Evidence = {
-  source: 'html' | 'header' | 'script' | 'link' | 'meta' | 'network' | 'computedStyle' | 'cookie' | 'path';
-  snippet: string;     // the actual URL, header line, or HTML chunk
+  source:
+    | 'html'
+    | 'header'
+    | 'script'
+    | 'link'
+    | 'meta'
+    | 'network'
+    | 'computedStyle'
+    | 'cookie'
+    | 'path';
+  snippet: string; // the actual URL, header line, or HTML chunk
   confidence: 'high' | 'medium' | 'low';
-  note?: string;       // optional human-readable hint
+  note?: string; // optional human-readable hint
 };
 ```
 
@@ -118,6 +127,7 @@ User → POST /api/extract {url}
 ## Detectors (29 — shipped in v1)
 
 ### Frontend / UI (15)
+
 1. `CssFrameworkDetector` — Tailwind / Bootstrap / Tachyons / Bulma / Foundation
 2. `CssCustomizationDetector` — CSS custom-property layer, CSS-in-JS runtime extraction
 3. `DesignSystemDetector` — Material, Chakra, MUI, Radix, shadcn/ui, Ant, Mantine
@@ -135,6 +145,7 @@ User → POST /api/extract {url}
 15. `IconsDetector` — lucide / heroicons / font-awesome / inline SVG
 
 ### Backend / Infra (14)
+
 16. `BackendFrameworkDetector` — Express, Next, Nuxt, PHP, ASP.NET, Phoenix, Nginx, Apache, Caddy, Cloudflare, gunicorn, uvicorn, Werkzeug, puma, unicorn, plus cookie-based inference (Laravel, Rails, Django, Express, Symfony, Java, ASP.NET)
 17. `LanguageDetector` — HTML / JS / TS / CSS / SCSS / Python / PHP / C# via script/link src, meta, headers
 18. `LibrariesDetector` — React/Vue/Svelte/moment/dayjs/luxon/date-fns/Chart.js/D3/Recharts/Highcharts/lodash/axios/SWR/TanStack-Query/RxJS/Immutable/Zod/Yup/Joi/Formik/React-Hook-Form
@@ -152,15 +163,15 @@ User → POST /api/extract {url}
 
 ## Error handling
 
-| Source | Status | Body |
-|---|---|---|
-| Zod validation fail | 400 | `{code:'VALIDATION', message, fields:{path:msg}[]}` |
-| Missing/invalid JWT | 401 | `{code:'UNAUTHENTICATED', message}` |
-| Wrong role | 403 | `{code:'FORBIDDEN', message}` |
-| Crawler timeout (>25s) | 504 | `{code:'CRAWLER_TIMEOUT', message, targetUrl}` |
-| Crawler target 4xx/5xx | 502 | `{code:'CRAWLER_TARGET', message, targetStatus, targetUrl}` |
-| Detector throws | — | Detector returns `{status:'error', error:message}`. Service never re-throws. |
-| Unexpected | 500 | `{code:'INTERNAL', message:'unexpected error', hint?}` |
+| Source                 | Status | Body                                                                         |
+| ---------------------- | ------ | ---------------------------------------------------------------------------- |
+| Zod validation fail    | 400    | `{code:'VALIDATION', message, fields:{path:msg}[]}`                          |
+| Missing/invalid JWT    | 401    | `{code:'UNAUTHENTICATED', message}`                                          |
+| Wrong role             | 403    | `{code:'FORBIDDEN', message}`                                                |
+| Crawler timeout (>25s) | 504    | `{code:'CRAWLER_TIMEOUT', message, targetUrl}`                               |
+| Crawler target 4xx/5xx | 502    | `{code:'CRAWLER_TARGET', message, targetStatus, targetUrl}`                  |
+| Detector throws        | —      | Detector returns `{status:'error', error:message}`. Service never re-throws. |
+| Unexpected             | 500    | `{code:'INTERNAL', message:'unexpected error', hint?}`                       |
 
 Global `HttpExceptionFilter` enforces the shape. No PII in errors. Target HTML is never echoed back.
 
@@ -230,15 +241,15 @@ None for v1. Tracked follow-ups:
 
 ## Error handling
 
-| Source | Status | Body |
-|---|---|---|
-| Zod validation fail | 400 | `{code:'VALIDATION', message, fields:{path:msg}[]}` |
-| Missing/invalid JWT | 401 | `{code:'UNAUTHENTICATED', message}` |
-| Wrong role | 403 | `{code:'FORBIDDEN', message}` |
-| Crawler timeout (>25s) | 504 | `{code:'CRAWLER_TIMEOUT', message, targetUrl}` |
-| Crawler target 4xx/5xx | 502 | `{code:'CRAWLER_TARGET', message, targetStatus, targetUrl}` |
-| Detector throws | — | Detector returns `{status:'error', error:message}`. Service never re-throws. |
-| Unexpected | 500 | `{code:'INTERNAL', message:'unexpected error', hint?}` |
+| Source                 | Status | Body                                                                         |
+| ---------------------- | ------ | ---------------------------------------------------------------------------- |
+| Zod validation fail    | 400    | `{code:'VALIDATION', message, fields:{path:msg}[]}`                          |
+| Missing/invalid JWT    | 401    | `{code:'UNAUTHENTICATED', message}`                                          |
+| Wrong role             | 403    | `{code:'FORBIDDEN', message}`                                                |
+| Crawler timeout (>25s) | 504    | `{code:'CRAWLER_TIMEOUT', message, targetUrl}`                               |
+| Crawler target 4xx/5xx | 502    | `{code:'CRAWLER_TARGET', message, targetStatus, targetUrl}`                  |
+| Detector throws        | —      | Detector returns `{status:'error', error:message}`. Service never re-throws. |
+| Unexpected             | 500    | `{code:'INTERNAL', message:'unexpected error', hint?}`                       |
 
 Global `HttpExceptionFilter` enforces the shape. No PII in errors. Target HTML is never echoed back.
 

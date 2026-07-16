@@ -1,11 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   ExtractionReportSchema,
   type Auth0User,
   type ExtractionListQuery,
 } from '@extractionstack/shared';
-import type { PrismaClient} from '@prisma/client';
-import { Prisma, type ExtractionJob, type ExtractionReport } from '@prisma/client';
+import { Prisma, PrismaClient, type ExtractionJob, type ExtractionReport } from '@prisma/client';
 import type {
   CreateStoredExtraction,
   ExtractionsRepositoryPort,
@@ -16,7 +15,7 @@ type JobWithReport = ExtractionJob & { report: ExtractionReport | null };
 
 @Injectable()
 export class ExtractionsRepository implements ExtractionsRepositoryPort {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(@Inject(PrismaClient) private readonly prisma: PrismaClient) {}
 
   async createOrGet(
     input: CreateStoredExtraction,

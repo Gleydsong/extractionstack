@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { BullMqExtractionQueue, EXTRACTION_QUEUE_NAME } from './extraction-queue.js';
 
 describe('BullMqExtractionQueue', () => {
+  it('uses a BullMQ-compatible versioned queue name', () => {
+    expect(EXTRACTION_QUEUE_NAME).toMatch(/^[^:]+$/);
+  });
+
   it('enqueues a deterministic durable job with bounded retries', async () => {
     const add = vi.fn().mockResolvedValue(undefined);
     const queue = new BullMqExtractionQueue({ add, getJob: vi.fn(), close: vi.fn() } as never);

@@ -3,9 +3,9 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module.js';
-import { ExtractModule } from './extract/extract.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ExtractionsModule } from './extractions/extractions.module.js';
+import { OperationsModule } from './operations/operations.module.js';
 
 @Module({
   imports: [
@@ -18,8 +18,8 @@ import { ExtractionsModule } from './extractions/extractions.module.js';
     ]),
     PrismaModule,
     AuthModule,
-    ExtractModule,
     ExtractionsModule,
+    OperationsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

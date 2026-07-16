@@ -6,6 +6,7 @@
 ## Context
 
 Three workspaces need to share TypeScript and a Zod contract:
+
 - `apps/api` (NestJS)
 - `apps/web` (Vite)
 - `packages/shared` (Zod schemas + types)

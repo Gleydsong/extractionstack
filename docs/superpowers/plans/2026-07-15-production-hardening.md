@@ -55,6 +55,7 @@
 ### Task 1: Restore a deterministic green toolchain
 
 **Files:**
+
 - Modify: `package.json`
 - Modify: `apps/api/package.json`
 - Modify: `apps/web/package.json`
@@ -64,6 +65,7 @@
 - Create: `apps/web/src/features/extract/ReportSection.spec.tsx`
 
 **Interfaces:**
+
 - Produces: repository scripts `lint`, `typecheck`, `test`, `test:integration`, `test:e2e`, and `verify` with deterministic exit codes.
 
 - [ ] **Step 1: Add a failing component regression test**
@@ -109,6 +111,7 @@ Expected: all commands exit 0 with real web tests executed.
 ### Task 2: Add strict contracts and environment guardrails
 
 **Files:**
+
 - Create: `packages/shared/src/schemas/jobs.ts`
 - Create: `packages/shared/src/schemas/jobs.spec.ts`
 - Modify: `packages/shared/src/schemas/common.ts`
@@ -120,18 +123,23 @@ Expected: all commands exit 0 with real web tests executed.
 - Modify: `.env.example`
 
 **Interfaces:**
+
 - Produces: `CreateExtractionSchema`, `ExtractionJobSchema`, `ExtractionListQuerySchema`, `ExtractionListResponseSchema`, `RuntimeEnvSchema`, and `loadRuntimeEnv()`.
 
 - [ ] **Step 1: Write strict contract tests**
 
 ```ts
 it('rejects unknown job fields and oversized idempotency keys', () => {
-  expect(CreateExtractionSchema.safeParse({ url: 'https://example.com', admin: true }).success).toBe(false);
+  expect(
+    CreateExtractionSchema.safeParse({ url: 'https://example.com', admin: true }).success,
+  ).toBe(false);
   expect(IdempotencyKeySchema.safeParse('x'.repeat(129)).success).toBe(false);
 });
 
 it('rejects arbitrary sort expressions', () => {
-  expect(ExtractionListQuerySchema.safeParse({ sort: 'createdAt; DROP TABLE User' }).success).toBe(false);
+  expect(ExtractionListQuerySchema.safeParse({ sort: 'createdAt; DROP TABLE User' }).success).toBe(
+    false,
+  );
 });
 ```
 
@@ -149,7 +157,9 @@ Use `.strict()`, URL maximum 2048, idempotency key pattern `/^[A-Za-z0-9._:-]{8,
 
 ```ts
 it('rejects production dev auth and wildcard cors', () => {
-  expect(() => loadRuntimeEnv({ NODE_ENV: 'production', AUTH_DEV_MODE: 'true', CORS_ORIGIN: '*' })).toThrow();
+  expect(() =>
+    loadRuntimeEnv({ NODE_ENV: 'production', AUTH_DEV_MODE: 'true', CORS_ORIGIN: '*' }),
+  ).toThrow();
 });
 ```
 
@@ -168,6 +178,7 @@ Expected: PASS.
 ### Task 3: Harden URL safety, error handling, and security invariants
 
 **Files:**
+
 - Modify: `apps/api/src/common/url-safety.ts`
 - Create: `apps/api/src/common/url-safety-v2.spec.ts`
 - Create: `apps/api/src/common/security-guardrails.ts`
@@ -179,6 +190,7 @@ Expected: PASS.
 - Modify: `apps/api/src/main.ts`
 
 **Interfaces:**
+
 - Produces: `UrlSafetyPolicy`, `assertSafeTargetUrl(url, resolver?, policy?)`, `assertSafeRedirectChain()`, and sanitized public errors.
 
 - [ ] **Step 1: Add failing SSRF table tests**
@@ -214,9 +226,12 @@ it('contains no unsafe Prisma raw query API in production sources', () => {
   expect(findUnsafeRawQueries(apiSourceFiles)).toEqual([]);
 });
 
-it.each(["' OR 1=1 --", "x'; DROP TABLE User; --", '${7*7}', '__proto__'])('treats malicious input as data', (value) => {
-  expect(() => assertSafeIdentifier(value)).toThrow();
-});
+it.each(["' OR 1=1 --", "x'; DROP TABLE User; --", '${7*7}', '__proto__'])(
+  'treats malicious input as data',
+  (value) => {
+    expect(() => assertSafeIdentifier(value)).toThrow();
+  },
+);
 ```
 
 - [ ] **Step 5: Sanitize errors and constrain HTTP input**
@@ -238,6 +253,7 @@ Expected: PASS.
 ### Task 4: Add durable persistence and ownership-aware lifecycle services
 
 **Files:**
+
 - Modify: `apps/api/prisma/schema.prisma`
 - Create: `apps/api/prisma/migrations/20260715_jobs_reports/migration.sql`
 - Modify: `apps/api/src/prisma/prisma.module.ts`
@@ -248,6 +264,7 @@ Expected: PASS.
 - Create: `apps/api/src/extractions/extractions.module.ts`
 
 **Interfaces:**
+
 - Produces: `createJob()`, `findOwnedJob()`, `listOwnedJobs()`, `requestCancellation()`, `markRunning()`, `completeJob()`, and `failJob()`.
 
 - [ ] **Step 1: Write lifecycle and ownership tests against repository ports**
@@ -290,6 +307,7 @@ Expected: PASS.
 ### Task 5: Add BullMQ and a separately runnable worker
 
 **Files:**
+
 - Modify: `pnpm-workspace.yaml`
 - Create: `apps/worker/package.json`
 - Create: `apps/worker/tsconfig.json`
@@ -303,7 +321,8 @@ Expected: PASS.
 - Modify: `apps/api/src/extract/crawler/playwright-crawler.ts`
 
 **Interfaces:**
-- Produces: queue name `extractions:v1`, payload `{ jobId: string }`, `ExtractionQueue.enqueue/cancel`, and `WorkerProcessor.process(job)`.
+
+- Produces: queue name `extractions-v1`, payload `{ jobId: string }`, `ExtractionQueue.enqueue/cancel`, and `WorkerProcessor.process(job)`.
 
 - [ ] **Step 1: Write queue contract and processor tests**
 
@@ -346,6 +365,7 @@ Expected: PASS.
 ### Task 6: Replace synchronous API routes with authenticated job APIs
 
 **Files:**
+
 - Delete: `apps/api/src/extract/extract.controller.ts`
 - Create: `apps/api/src/extractions/extractions.controller.ts`
 - Create: `apps/api/src/extractions/extractions.controller.spec.ts`
@@ -354,6 +374,7 @@ Expected: PASS.
 - Create: `apps/api/test/extractions.e2e.spec.ts`
 
 **Interfaces:**
+
 - Produces: `POST/GET /api/extractions`, `GET /api/extractions/:id`, and `POST /api/extractions/:id/cancel`.
 
 - [ ] **Step 1: Write API E2E contract tests**
@@ -368,9 +389,14 @@ it('creates a durable job and returns 202', async () => {
     .expect(({ body }) => expect(body.status).toBe('QUEUED'));
 });
 
-it.each(["' OR 1=1 --", "x'; DROP TABLE User; --"])('does not broaden an ID lookup: %s', async (id) => {
-  await request(app.getHttpServer()).get(`/api/extractions/${encodeURIComponent(id)}`).expect(400);
-});
+it.each(["' OR 1=1 --", "x'; DROP TABLE User; --"])(
+  'does not broaden an ID lookup: %s',
+  async (id) => {
+    await request(app.getHttpServer())
+      .get(`/api/extractions/${encodeURIComponent(id)}`)
+      .expect(400);
+  },
+);
 ```
 
 Add ownership, admin, unknown-key, malformed cursor, duplicate idempotency, cancellation, error sanitization, 16 KiB payload, and rate-limit cases.
@@ -400,6 +426,7 @@ Expected: PASS.
 ### Task 7: Migrate the frontend to asynchronous jobs and add browser E2E
 
 **Files:**
+
 - Create: `apps/web/src/lib/api-client.ts`
 - Create: `apps/web/src/lib/api-client.spec.ts`
 - Create: `apps/web/src/features/extractions/useExtractionJob.ts`
@@ -413,6 +440,7 @@ Expected: PASS.
 - Create: `e2e/extraction-flow.spec.ts`
 
 **Interfaces:**
+
 - Produces: parsed `apiRequest<T>()`, `useExtractionJob()`, protected dashboard/history/detail routes, and browser E2E scripts.
 
 - [ ] **Step 1: Write API parsing and polling tests**
@@ -459,6 +487,7 @@ Expected: PASS.
 ### Task 8: Add operational telemetry, containers, and runbooks
 
 **Files:**
+
 - Create: `apps/api/src/common/request-context.middleware.ts`
 - Create: `apps/api/src/common/request-context.middleware.spec.ts`
 - Create: `apps/api/src/operations/metrics.service.ts`
@@ -476,6 +505,7 @@ Expected: PASS.
 - Modify: `README.md`
 
 **Interfaces:**
+
 - Produces: `/health/live`, `/health/ready`, `/metrics`, request ID propagation, redacted JSON logs, and five-service Docker Compose deployment.
 
 - [ ] **Step 1: Write operational endpoint and request-ID tests**

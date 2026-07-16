@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { DetectorResult, ExtractionReport } from '@extractionstack/shared';
 import { ReportSection } from './ReportSection';
+import { InvestigationReportView } from './InvestigationReportView';
 
 interface ReportViewProps {
   report: ExtractionReport;
@@ -27,14 +28,31 @@ export function ReportView({ report, url }: ReportViewProps): JSX.Element {
         <div>Duração: {report.durationMs}ms</div>
       </div>
       <div style={{ marginTop: 12 }}>
-        {sections.map((s) => (
-          <ReportSection
-            key={s.dimension}
-            section={s}
-            isOpen={open.has(s.dimension)}
-            onToggle={() => toggle(s.dimension)}
-          />
-        ))}
+        {report.investigation ? (
+          <>
+            <InvestigationReportView report={report.investigation} />
+            <details>
+              <summary>Dados técnicos dos detectores</summary>
+              {sections.map((s) => (
+                <ReportSection
+                  key={s.dimension}
+                  section={s}
+                  isOpen={open.has(s.dimension)}
+                  onToggle={() => toggle(s.dimension)}
+                />
+              ))}
+            </details>
+          </>
+        ) : (
+          sections.map((s) => (
+            <ReportSection
+              key={s.dimension}
+              section={s}
+              isOpen={open.has(s.dimension)}
+              onToggle={() => toggle(s.dimension)}
+            />
+          ))
+        )}
       </div>
     </div>
   );

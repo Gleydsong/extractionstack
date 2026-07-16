@@ -12,6 +12,8 @@ coverage
 playwright-report
 test-results
 *.tsbuildinfo
+playwright-report/
+test-results/
 prisma/migrations/**/migration_lock.toml
 !.env.example
 apps/api/prisma/.env

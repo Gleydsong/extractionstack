@@ -5,7 +5,7 @@ import { WorkerModule } from './worker.module.js';
 
 async function bootstrap(): Promise<void> {
   loadRuntimeEnv(process.env);
-  const app = await NestFactory.createApplicationContext(WorkerModule, { bufferLogs: true });
+  const app = await NestFactory.createApplicationContext(WorkerModule);
   app.enableShutdownHooks();
 }
 

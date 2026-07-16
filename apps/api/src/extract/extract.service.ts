@@ -10,14 +10,15 @@ import { mapExtractError } from '../common/extract-errors.js';
 import { assertSafeTargetUrl } from '../common/url-safety.js';
 import type { Detector } from './detectors/detector.interface.js';
 import { DETECTOR_LIST, DETECTORS_TOKEN, RESPONSIVE_GRID_MERGE_KEY } from './detectors/registry.js';
-import type { PlaywrightCrawler } from './crawler/playwright-crawler.js';
+import { PlaywrightCrawler } from './crawler/playwright-crawler.js';
+import { buildInvestigationReport } from './investigation-report.builder.js';
 
 @Injectable()
 export class ExtractService {
   private readonly logger = new Logger(ExtractService.name);
 
   constructor(
-    private readonly crawler: PlaywrightCrawler,
+    @Inject(PlaywrightCrawler) private readonly crawler: PlaywrightCrawler,
     @Inject(DETECTORS_TOKEN)
     private readonly detectors: Detector[],
   ) {}
@@ -39,6 +40,7 @@ export class ExtractService {
         fetchedAt: page.fetchedAt,
         durationMs: Date.now() - start,
         sections: Object.fromEntries(sorted.map((r) => [r.dimension, r])),
+        investigation: buildInvestigationReport(page, sorted, req.url),
       };
       this.logger.log(`extract done url=${req.url} durationMs=${report.durationMs}`);
       return report;
