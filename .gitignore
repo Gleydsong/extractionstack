@@ -4,6 +4,7 @@ build
 .turbo
 .pnpm-store
 .worktrees/
+.superpowers/
 *.log
 .env
 .env.local
