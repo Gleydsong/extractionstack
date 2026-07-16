@@ -5,6 +5,33 @@ const booleanString = z
   .default('false')
   .transform((value) => value === 'true');
 
+const base64Encoded32Bytes = z.string().refine((value) => {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    return false;
+  }
+
+  const decoded = Buffer.from(value, 'base64');
+  return decoded.length === 32 && decoded.toString('base64') === value;
+}, 'must be a base64-encoded 32-byte key');
+
+const modelAllowlist = (fallback: string) =>
+  z
+    .string()
+    .default(fallback)
+    .transform((value, context) => {
+      const models = [...new Set(value.split(',').map((model) => model.trim()).filter(Boolean))];
+      if (
+        models.length < 1 ||
+        models.length > 50 ||
+        models.some((model) => model.length > 128)
+      ) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: 'invalid model allowlist' });
+        return z.NEVER;
+      }
+
+      return Object.freeze(models);
+    });
+
 const RuntimeEnvBaseSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
@@ -32,6 +59,22 @@ const RuntimeEnvBaseSchema = z.object({
   THROTTLE_LIMIT: z.coerce.number().int().min(1).max(10_000).default(10),
   METRICS_TOKEN: z.string().min(16).max(256).optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  LLM_CREDENTIAL_MASTER_KEY: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    base64Encoded32Bytes.optional(),
+  ),
+  LLM_CREDENTIAL_KEY_VERSION: z.string().trim().min(1).max(64).default('local-v1'),
+  LLM_OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+  LLM_GEMINI_BASE_URL: z
+    .string()
+    .url()
+    .default('https://generativelanguage.googleapis.com/v1beta'),
+  LLM_OPENAI_MODEL_ALLOWLIST: modelAllowlist('gpt-5-mini'),
+  LLM_GEMINI_MODEL_ALLOWLIST: modelAllowlist('gemini-2.5-flash'),
+  LLM_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
+  LLM_MAX_INPUT_TOKENS: z.coerce.number().int().min(1).max(1_000_000).default(32_000),
+  LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(1).max(1_000_000).default(4_096),
+  LLM_MAX_COST_MINOR_UNITS: z.coerce.number().int().min(0).max(1_000_000).default(500),
 });
 
 export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
@@ -48,6 +91,14 @@ export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
   }
   if (!env.AUTH0_AUDIENCE || /replace-me/i.test(env.AUTH0_AUDIENCE)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'a real AUTH0_AUDIENCE is required' });
+  }
+  if (!env.LLM_CREDENTIAL_MASTER_KEY) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'an LLM credential master key is required' });
+  }
+  for (const endpoint of [env.LLM_OPENAI_BASE_URL, env.LLM_GEMINI_BASE_URL]) {
+    if (new URL(endpoint).protocol !== 'https:') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'LLM provider URLs must use HTTPS' });
+    }
   }
 });
 
