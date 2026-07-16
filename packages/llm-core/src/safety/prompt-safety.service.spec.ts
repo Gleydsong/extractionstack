@@ -85,7 +85,7 @@ describe('PromptSafetyService', () => {
 
   it('normalizes and bounds header fields before rendering and blocks newline name bypasses', () => {
     const sensitive = safety.inspectHeader('Authorization\r\nX-Other', 'Bearer hidden');
-    const safe = safety.inspectHeader('X-Build\r\nVariant', 'nginx\r\n safe');
+    const safe = safety.inspectHeader('X-Build Variant', 'nginx\r\n safe');
     const bounded = safety.inspectHeader(`X-${'n'.repeat(300)}`, 'safe');
 
     expect(sensitive.safeText).toContain('[REDACTED]');
@@ -93,5 +93,77 @@ describe('PromptSafetyService', () => {
     expect(safe.safeText).toBe('X-Build Variant: nginx safe');
     expect(bounded.safeText.length).toBeLessThanOrEqual(4_200);
     expect(bounded.safeText).not.toContain('n'.repeat(300));
+  });
+
+  it('redacts escape-aware quoted secrets and preserves text after the matching quote', () => {
+    const inspection = safety.inspect(
+      [
+        String.raw`password="first\"escaped-secret\"tail" mode=readonly`,
+        String.raw`client_secret='single\'quoted-secret' scope=public`,
+      ].join('\n'),
+    );
+
+    expect(inspection.safeText).toContain('mode=readonly');
+    expect(inspection.safeText).toContain('scope=public');
+    expect(inspection.safeText).not.toMatch(
+      /password|client_secret|escaped-secret|tail|quoted-secret/i,
+    );
+  });
+
+  it('conservatively redacts unterminated quoted secrets without consuming the next line', () => {
+    const inspection = safety.inspect('api_key="unterminated secret suffix\nnext-line=safe');
+
+    expect(inspection.safeText).not.toMatch(/api_key|unterminated|secret suffix/i);
+    expect(inspection.safeText).toContain('next-line=safe');
+  });
+
+  it('canonicalizes split sensitive header names and preserves benign headers', () => {
+    const authorization = safety.inspectHeader('Authori\r\n zation', 'Bearer auth-secret');
+    const cookie = safety.inspectHeader('Set-\r\n Cookie', 'session=cookie-secret');
+    const benign = safety.inspectHeader('X-Build\r\n Variant', 'nginx\r\n stable');
+
+    expect(authorization.safeText).not.toContain('auth-secret');
+    expect(authorization.safeText).toContain('[REDACTED]');
+    expect(cookie.safeText).not.toContain('cookie-secret');
+    expect(cookie.safeText).toContain('[REDACTED]');
+    expect(benign.safeText).toBe('X-Build Variant: [REDACTED]');
+  });
+
+  it('falls arbitrary assignments back to free-text safety instead of treating them as URLs', () => {
+    const inspection = safety.inspectUrl('password=standalone-secret safe=visible');
+
+    expect(inspection.safeText).not.toContain('standalone-secret');
+    expect(inspection.safeText).toContain('safe=visible');
+    expect(inspection.safeText).not.toMatch(/^\//);
+  });
+
+  it('sanitizes URL paths and hash parameters while retaining safe neighboring data', () => {
+    const inspection = safety.inspectUrl(
+      'https://example.test/files/password=path-secret/public?view=full#token=oauth-secret&tab=docs',
+    );
+
+    expect(inspection.safeText).toContain('example.test/files/');
+    expect(inspection.safeText).toContain('/public?view=full');
+    expect(inspection.safeText).toContain('#tab=docs');
+    expect(inspection.safeText).not.toMatch(/path-secret|oauth-secret|password=|token=/i);
+  });
+
+  it('preserves non-credential authentication descriptions', () => {
+    const inspection = safety.inspect(
+      'Auth: OAuth 2.0 com PKCE\nauth architecture: delegated\nAuthorization = "OAuth architecture"',
+    );
+
+    expect(inspection.safeText).toContain('Auth: OAuth 2.0 com PKCE');
+    expect(inspection.safeText).toContain('auth architecture: delegated');
+    expect(inspection.safeText).toContain('Authorization = "OAuth architecture"');
+    expect(inspection.reasonCodes).toEqual([]);
+  });
+
+  it('redacts credential-shaped generic authorization while preserving following safe text', () => {
+    const inspection = safety.inspect('Authorization = Bearer opaque-credential mode=readonly');
+
+    expect(inspection.safeText).not.toContain('opaque-credential');
+    expect(inspection.safeText).toContain('mode=readonly');
+    expect(inspection.reasonCodes).toEqual(['SECRET_LIKE_VALUE']);
   });
 });

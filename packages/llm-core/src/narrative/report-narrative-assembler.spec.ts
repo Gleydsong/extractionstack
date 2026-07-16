@@ -328,6 +328,27 @@ describe('ReportNarrativeAssembler', () => {
 
     expect(report).toEqual(snapshot);
   });
+
+  it('integrates escape-aware text and path/hash URL sanitization without losing safe evidence', () => {
+    const report = reportFixture({
+      conclusion: String.raw`password="first\"hidden\"tail" safe-conclusion`,
+      technicalEvidence: {
+        ...reportFixture().technicalEvidence,
+        analyzedUrls: [
+          'https://example.test/password=path-hidden/public?view=full#authorization=Bearer%20hash-hidden&tab=safe',
+        ],
+        metadata: { authentication: 'Auth: OAuth 2.0 com PKCE' },
+      },
+    });
+
+    const brief = assembler.assemble(report);
+
+    expect(brief.narrative).toContain('safe-conclusion');
+    expect(brief.narrative).toContain('view=full');
+    expect(brief.narrative).toContain('tab=safe');
+    expect(brief.narrative).toContain('Auth: OAuth 2.0 com PKCE');
+    expect(brief.narrative).not.toMatch(/hidden|password=|authorization=/i);
+  });
 });
 
 function deepFreeze<T>(value: T): T {

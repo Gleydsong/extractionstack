@@ -15,11 +15,11 @@ export type SafetyInspection = Readonly<{
 
 const SENSITIVE_HEADER_NAMES = new Set([
   'authorization',
-  'proxy-authorization',
+  'proxyauthorization',
   'cookie',
-  'set-cookie',
-  'x-api-key',
-  'x-auth-token',
+  'setcookie',
+  'xapikey',
+  'xauthtoken',
 ]);
 const SECRET_QUERY_KEYS = new Set([
   'apikey',
@@ -33,15 +33,26 @@ const SECRET_QUERY_KEYS = new Set([
   'auth',
   'authorization',
 ]);
+const SECRET_ASSIGNMENT_START =
+  /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|authorization)\b\s*(?:=|:)\s*/gi;
 const QUOTED_SENSITIVE_HEADER =
   /(['"])((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:)[^\r\n]*?\1/gi;
 const EMBEDDED_SENSITIVE_HEADER =
   /((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:)(?!\s*\[REDACTED\])\s*[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gi;
-const SECRET_LIKE_VALUE =
-  /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|secret|auth)\s*(?:=|:)\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s&#;,]+)/gi;
 const SOURCE_DELIMITER = /<\/?untrusted_extraction_report\s*>/gi;
 const INSTRUCTION_LIKE_CONTENT =
   /\b(?:ignore|disregard|override|forget)\b[^\n.]{0,100}\b(?:instructions?|prompt|policy|rules?)\b|\b(?:system|developer)\s+prompt\b|\bfollow\s+(?:these|my|system)\s+(?:instructions?|prompt)\b/i;
+const ABSOLUTE_HTTP_URL = /^https?:\/\//i;
+const EXPLICIT_RELATIVE_REFERENCE = /^(?:\/|\.\/|\.\.\/|\?|#)/;
+const SECRET_MARKER = '[SECRET VALUE REDACTED]';
+const MAX_SAFE_URL_CHARS = 4_096;
+const MAX_SECRET_VALUE_SCAN_CHARS = 8_192;
+const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+type ParsedAssignmentValue = Readonly<{
+  end: number;
+  credentialText: string;
+}>;
 
 export class PromptSafetyService {
   inspect(input: string): SafetyInspection {
@@ -59,10 +70,11 @@ export class PromptSafetyService {
       addReason(reasons, 'SENSITIVE_HEADER_VALUE');
       return `${header} [REDACTED]`;
     });
-    safeText = safeText.replace(SECRET_LIKE_VALUE, () => {
-      addReason(reasons, 'SECRET_LIKE_VALUE');
-      return '[SECRET VALUE REDACTED]';
-    });
+
+    const assignmentInspection = redactSecretAssignments(safeText);
+    safeText = assignmentInspection.safeText;
+    if (assignmentInspection.modified) addReason(reasons, 'SECRET_LIKE_VALUE');
+
     safeText = safeText.replace(SOURCE_DELIMITER, () => {
       addReason(reasons, 'SOURCE_DELIMITER_ESCAPE');
       return '[DELIMITADOR DE FONTE REMOVIDO]';
@@ -75,38 +87,23 @@ export class PromptSafetyService {
   }
 
   inspectUrl(input: string): SafetyInspection {
-    const reasons: SafetyReasonCode[] = [];
     const normalizedInput = normalizeSingleLine(input);
-    const parsed = parseUrl(normalizedInput);
-    if (!parsed) return this.inspect(decodeConservatively(normalizedInput));
-
-    if (parsed.url.username || parsed.url.password) {
-      parsed.url.username = '';
-      parsed.url.password = '';
-      addReason(reasons, 'SECRET_LIKE_VALUE');
+    if (ABSOLUTE_HTTP_URL.test(normalizedInput)) {
+      return this.inspectAbsoluteUrl(normalizedInput, input);
     }
-
-    const safeQuery = new URLSearchParams();
-    for (const [key, value] of parsed.url.searchParams.entries()) {
-      if (isSecretKey(key)) {
-        addReason(reasons, 'SECRET_LIKE_VALUE');
-      } else {
-        safeQuery.append(key, value);
-      }
+    if (EXPLICIT_RELATIVE_REFERENCE.test(normalizedInput)) {
+      return this.inspectRelativeUrl(normalizedInput, input);
     }
-    parsed.url.search = safeQuery.toString();
-
-    const safeText = parsed.relative
-      ? `${parsed.url.pathname}${parsed.url.search}${parsed.url.hash}`
-      : parsed.url.toString();
-    return inspection(safeText, reasons, safeText !== input);
+    return this.inspect(decodeConservatively(normalizedInput));
   }
 
   inspectHeader(name: string, value: string): SafetyInspection {
     const normalizedName = normalizeSingleLine(name);
+    const canonicalName = canonicalizeHeaderName(name);
     const safeName =
       normalizedName.length <= 160 ? normalizedName : '[HEADER NAME OMITTED BY SAFE LIMIT]';
-    if (isSensitiveHeaderName(normalizedName)) {
+    const ambiguousFoldedName = hasControlOrFolding(name);
+    if (SENSITIVE_HEADER_NAMES.has(canonicalName) || ambiguousFoldedName) {
       return inspection(`${safeName}: [REDACTED]`, ['SENSITIVE_HEADER_VALUE'], true);
     }
 
@@ -121,6 +118,226 @@ export class PromptSafetyService {
       safeName !== name || normalizedValue !== value || valueInspection.modified,
     );
   }
+
+  private inspectAbsoluteUrl(normalizedInput: string, originalInput: string): SafetyInspection {
+    let url: URL;
+    try {
+      url = new URL(normalizedInput);
+    } catch {
+      return this.inspect(decodeConservatively(normalizedInput));
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return this.inspect(decodeConservatively(normalizedInput));
+    }
+
+    const reasons: SafetyReasonCode[] = [];
+    if (url.username || url.password) {
+      url.username = '';
+      url.password = '';
+      addReason(reasons, 'SECRET_LIKE_VALUE');
+    }
+    url.pathname = sanitizePath(url.pathname, reasons, this);
+    url.search = sanitizeParameters(url.searchParams, reasons, this);
+    url.hash = sanitizeFragment(url.hash, reasons, this);
+    return finalizeUrl(url.toString(), reasons, originalInput);
+  }
+
+  private inspectRelativeUrl(normalizedInput: string, originalInput: string): SafetyInspection {
+    if (normalizedInput.startsWith('//')) {
+      try {
+        const parsed = new URL(`https:${normalizedInput}`);
+        const inspected = this.inspectAbsoluteUrl(parsed.toString(), originalInput);
+        const safeText = inspected.safeText.startsWith('https:')
+          ? inspected.safeText.slice('https:'.length)
+          : inspected.safeText;
+        return inspection(safeText, inspected.reasonCodes, safeText !== originalInput);
+      } catch {
+        return this.inspect(decodeConservatively(normalizedInput));
+      }
+    }
+
+    const reasons: SafetyReasonCode[] = [];
+    const reference = splitRelativeReference(normalizedInput);
+    const safePath = sanitizePath(reference.path, reasons, this);
+    const safeQuery = sanitizeParameters(new URLSearchParams(reference.query), reasons, this);
+    const safeFragment = sanitizeFragment(
+      reference.fragment ? `#${reference.fragment}` : '',
+      reasons,
+      this,
+    );
+    const queryPrefix = safeQuery ? `?${safeQuery}` : '';
+    return finalizeUrl(`${safePath}${queryPrefix}${safeFragment}`, reasons, originalInput);
+  }
+}
+
+function redactSecretAssignments(input: string): { safeText: string; modified: boolean } {
+  const matcher = new RegExp(SECRET_ASSIGNMENT_START.source, SECRET_ASSIGNMENT_START.flags);
+  const parts: string[] = [];
+  let cursor = 0;
+  let modified = false;
+  let match: RegExpExecArray | null;
+
+  while ((match = matcher.exec(input)) !== null) {
+    const canonicalKey = canonicalizeKey(match[1] ?? '');
+    const value = parseAssignmentValue(input, matcher.lastIndex, canonicalKey === 'authorization');
+    if (!value) continue;
+    if (canonicalKey === 'authorization' && !isCredentialShaped(value.credentialText)) {
+      matcher.lastIndex = value.end;
+      continue;
+    }
+
+    parts.push(input.slice(cursor, match.index), SECRET_MARKER);
+    cursor = value.end;
+    matcher.lastIndex = value.end;
+    modified = true;
+  }
+
+  if (!modified) return { safeText: input, modified: false };
+  parts.push(input.slice(cursor));
+  return { safeText: parts.join(''), modified: true };
+}
+
+function parseAssignmentValue(
+  input: string,
+  start: number,
+  authorization: boolean,
+): ParsedAssignmentValue | undefined {
+  if (start >= input.length) return undefined;
+  const first = input[start];
+  if (first !== '"' && first !== "'") {
+    let end = start;
+    while (end < input.length && !/[\s&#;,/]/.test(input[end] ?? '')) end += 1;
+    const firstToken = input.slice(start, end);
+    if (authorization && /^(?:bearer|basic)$/i.test(firstToken)) {
+      let credentialStart = end;
+      while (credentialStart < input.length && /[ \t]/.test(input[credentialStart] ?? '')) {
+        credentialStart += 1;
+      }
+      let credentialEnd = credentialStart;
+      while (credentialEnd < input.length && !/[\s&#;,/]/.test(input[credentialEnd] ?? '')) {
+        credentialEnd += 1;
+      }
+      if (credentialEnd > credentialStart) {
+        return {
+          end: credentialEnd,
+          credentialText: `${firstToken} ${input.slice(credentialStart, credentialEnd)}`,
+        };
+      }
+    }
+    return end > start ? { end, credentialText: input.slice(start, end) } : undefined;
+  }
+
+  const quote = first;
+  const lineEndIndex = input.indexOf('\n', start + 1);
+  const lineEnd = lineEndIndex === -1 ? input.length : lineEndIndex;
+  let escaped = false;
+  const scanEnd = Math.min(lineEnd, start + 1 + MAX_SECRET_VALUE_SCAN_CHARS);
+  for (let index = start + 1; index < scanEnd; index += 1) {
+    const character = input[index];
+    if (escaped) {
+      escaped = false;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (character === quote) {
+      return {
+        end: index + 1,
+        credentialText: unescapeQuoted(input.slice(start + 1, index)),
+      };
+    }
+  }
+  return {
+    end: lineEnd,
+    credentialText: unescapeQuoted(input.slice(start + 1, lineEnd)),
+  };
+}
+
+function isCredentialShaped(value: string): boolean {
+  const candidate = value.trim();
+  return (
+    /^(?:bearer|basic)\s+\S+/i.test(candidate) ||
+    /^(?:sk|pk|api|token)[-_][a-z0-9._-]{6,}$/i.test(candidate) ||
+    /^[a-z0-9+/_=-]{20,}$/i.test(candidate)
+  );
+}
+
+function unescapeQuoted(value: string): string {
+  return value.replace(/\\(.)/g, '$1');
+}
+
+function sanitizePath(
+  path: string,
+  reasons: SafetyReasonCode[],
+  safety: PromptSafetyService,
+): string {
+  return path
+    .split('/')
+    .map((segment) => {
+      if (!segment || segment === '.' || segment === '..') return segment;
+      const decoded = decodeConservatively(segment);
+      const inspected = safety.inspect(decoded);
+      mergeReasons(reasons, inspected.reasonCodes);
+      return encodeURIComponent(inspected.safeText);
+    })
+    .join('/');
+}
+
+function sanitizeParameters(
+  parameters: URLSearchParams,
+  reasons: SafetyReasonCode[],
+  safety: PromptSafetyService,
+): string {
+  const safeParameters = new URLSearchParams();
+  for (const [key, value] of parameters.entries()) {
+    if (isSecretKey(key)) {
+      addReason(reasons, 'SECRET_LIKE_VALUE');
+      continue;
+    }
+    const inspectedValue = safety.inspect(value);
+    mergeReasons(reasons, inspectedValue.reasonCodes);
+    safeParameters.append(key, inspectedValue.safeText);
+  }
+  return safeParameters.toString();
+}
+
+function sanitizeFragment(
+  hash: string,
+  reasons: SafetyReasonCode[],
+  safety: PromptSafetyService,
+): string {
+  if (!hash) return '';
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (raw.includes('=') || raw.includes('&')) {
+    const parameters = sanitizeParameters(new URLSearchParams(raw), reasons, safety);
+    return parameters ? `#${parameters}` : '';
+  }
+  const inspected = safety.inspect(decodeConservatively(raw));
+  mergeReasons(reasons, inspected.reasonCodes);
+  return inspected.safeText ? `#${encodeURIComponent(inspected.safeText)}` : '';
+}
+
+function finalizeUrl(
+  safeText: string,
+  reasons: readonly SafetyReasonCode[],
+  originalInput: string,
+): SafetyInspection {
+  const bounded = safeText.length <= MAX_SAFE_URL_CHARS ? safeText : '[URL OMITTED BY SAFE LIMIT]';
+  return inspection(bounded, reasons, bounded !== originalInput);
+}
+
+function splitRelativeReference(value: string): {
+  path: string;
+  query: string;
+  fragment: string;
+} {
+  const hashIndex = value.indexOf('#');
+  const beforeHash = hashIndex === -1 ? value : value.slice(0, hashIndex);
+  const fragment = hashIndex === -1 ? '' : value.slice(hashIndex + 1);
+  const queryIndex = beforeHash.indexOf('?');
+  return {
+    path: queryIndex === -1 ? beforeHash : beforeHash.slice(0, queryIndex),
+    query: queryIndex === -1 ? '' : beforeHash.slice(queryIndex + 1),
+    fragment,
+  };
 }
 
 function inspection(
@@ -139,20 +356,27 @@ function addReason(reasons: SafetyReasonCode[], reason: SafetyReasonCode): void 
   if (!reasons.includes(reason)) reasons.push(reason);
 }
 
-function isSecretKey(key: string): boolean {
-  return SECRET_QUERY_KEYS.has(
-    key
-      .normalize('NFKC')
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, ''),
-  );
+function mergeReasons(target: SafetyReasonCode[], source: readonly SafetyReasonCode[]): void {
+  source.forEach((reason) => addReason(target, reason));
 }
 
-function isSensitiveHeaderName(name: string): boolean {
-  return name
+function canonicalizeKey(key: string): string {
+  return key
+    .normalize('NFKC')
     .toLowerCase()
-    .split(/[^a-z0-9-]+/)
-    .some((part) => SENSITIVE_HEADER_NAMES.has(part));
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function isSecretKey(key: string): boolean {
+  return SECRET_QUERY_KEYS.has(canonicalizeKey(key));
+}
+
+function canonicalizeHeaderName(name: string): string {
+  return canonicalizeKey(name);
+}
+
+function hasControlOrFolding(value: string): boolean {
+  return CONTROL_OR_FORMAT.test(value);
 }
 
 function normalizeLineEndings(value: string): string {
@@ -171,18 +395,5 @@ function decodeConservatively(value: string): string {
     return decodeURIComponent(value);
   } catch {
     return value;
-  }
-}
-
-function parseUrl(value: string): { url: URL; relative: boolean } | undefined {
-  try {
-    return { url: new URL(value), relative: false };
-  } catch {
-    try {
-      const url = new URL(value, 'https://sanitizer.invalid');
-      return { url, relative: true };
-    } catch {
-      return undefined;
-    }
   }
 }
