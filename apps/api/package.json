@@ -15,6 +15,7 @@
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@extractionstack/llm-core": "workspace:*",
     "@extractionstack/shared": "workspace:*",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.1.1",

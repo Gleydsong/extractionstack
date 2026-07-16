@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ExtractionsModule } from './extractions/extractions.module.js';
 import { OperationsModule } from './operations/operations.module.js';
+import { AiConnectionsModule } from './ai-connections/ai-connections.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { OperationsModule } from './operations/operations.module.js';
     AuthModule,
     ExtractionsModule,
     OperationsModule,
+    AiConnectionsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

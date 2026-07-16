@@ -38,6 +38,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@extractionstack/llm-core':
+        specifier: workspace:*
+        version: link:../../packages/llm-core
       '@extractionstack/shared':
         specifier: workspace:*
         version: link:../../packages/shared
