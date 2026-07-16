@@ -2,7 +2,9 @@ import { z } from 'zod';
 import {
   CredentialModeSchema,
   LlmProviderSchema,
+  ProviderAuthorizationSchema,
   PublicIdSchema,
+  PublicIsoDateTimeSchema,
 } from './ai-connections.js';
 
 const PromptCategorySchema = z.enum([
@@ -67,8 +69,8 @@ export const PromptProjectSchema = z
     wizardInput: PromptWizardInputSchema,
     currentVersionId: PublicIdSchema.nullable(),
     state: z.enum(['ACTIVE', 'ARCHIVED']),
-    createdAt: z.string().datetime(),
-    updatedAt: z.string().datetime(),
+    createdAt: PublicIsoDateTimeSchema,
+    updatedAt: PublicIsoDateTimeSchema,
   })
   .strict();
 export type PromptProject = z.infer<typeof PromptProjectSchema>;
@@ -88,7 +90,7 @@ export const PromptVersionSchema = z
     reportSchemaVersion: z.number().int().positive(),
     provider: LlmProviderSchema.nullable(),
     model: z.string().trim().min(1).max(128).nullable(),
-    createdAt: z.string().datetime(),
+    createdAt: PublicIsoDateTimeSchema,
   })
   .strict();
 export type PromptVersion = z.infer<typeof PromptVersionSchema>;
@@ -104,11 +106,11 @@ const PromptJobBaseSchema = z.object({
   maxAttempts: z.number().int().min(1).max(10),
   sourcePromptVersionId: PublicIdSchema.nullable(),
   resultPromptVersionId: PublicIdSchema.nullable(),
-  queuedAt: z.string().datetime(),
-  startedAt: z.string().datetime().nullable(),
-  finishedAt: z.string().datetime().nullable(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime(),
+  queuedAt: PublicIsoDateTimeSchema,
+  startedAt: PublicIsoDateTimeSchema.nullable(),
+  finishedAt: PublicIsoDateTimeSchema.nullable(),
+  createdAt: PublicIsoDateTimeSchema,
+  updatedAt: PublicIsoDateTimeSchema,
 });
 
 const PendingPromptJobSchema = PromptJobBaseSchema.extend({
@@ -133,12 +135,22 @@ const CancelledPromptJobSchema = PromptJobBaseSchema.extend({
   message: z.string().trim().min(1).max(1_000),
 }).strict();
 
-export const PromptGenerationJobSchema = z.discriminatedUnion('status', [
-  PendingPromptJobSchema,
-  SucceededPromptJobSchema,
-  FailedPromptJobSchema,
-  CancelledPromptJobSchema,
-]);
+export const PromptGenerationJobSchema = z
+  .discriminatedUnion('status', [
+    PendingPromptJobSchema,
+    SucceededPromptJobSchema,
+    FailedPromptJobSchema,
+    CancelledPromptJobSchema,
+  ])
+  .superRefine(({ provider, credentialMode }, context) => {
+    const result = ProviderAuthorizationSchema.safeParse({ provider, credentialMode });
+
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        context.addIssue({ ...issue, path: issue.path });
+      }
+    }
+  });
 export type PromptGenerationJob = z.infer<typeof PromptGenerationJobSchema>;
 
 export const PromptPreviewSchema = z
@@ -152,8 +164,8 @@ export const PromptPreviewSchema = z
     model: z.string().trim().min(1).max(128),
     finishReason: z.string().trim().min(1).max(160).nullable(),
     latencyMs: z.number().int().nonnegative().max(3_600_000).nullable(),
-    createdAt: z.string().datetime(),
-    completedAt: z.string().datetime().nullable(),
+    createdAt: PublicIsoDateTimeSchema,
+    completedAt: PublicIsoDateTimeSchema.nullable(),
   })
   .strict();
 export type PromptPreview = z.infer<typeof PromptPreviewSchema>;
