@@ -7,6 +7,17 @@ const GCM_IV_BYTES = 12;
 const GCM_TAG_BYTES = 16;
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const ENVELOPE_KEYS = Object.freeze([
+  'algorithm',
+  'keyVersion',
+  'wrappedKey',
+  'wrappedKeyIv',
+  'wrappedKeyTag',
+  'ciphertext',
+  'iv',
+  'tag',
+] as const);
 
 export type CredentialEnvelope = Readonly<{
   algorithm: 'AES-256-GCM';
@@ -44,12 +55,83 @@ function decodeBase64(value: string, expectedBytes?: number): Buffer {
   }
 
   const decoded = Buffer.from(value, 'base64');
-  if (decoded.toString('base64') !== value || (expectedBytes !== undefined && decoded.length !== expectedBytes)) {
+  if (
+    decoded.toString('base64') !== value ||
+    (expectedBytes !== undefined && decoded.length !== expectedBytes)
+  ) {
     decoded.fill(0);
     throw new Error('invalid decoded length');
   }
 
   return decoded;
+}
+
+function isCanonicalBase64WithinDecodedBounds(
+  value: unknown,
+  minimumBytes: number,
+  maximumBytes: number,
+): value is string {
+  if (typeof value !== 'string') return false;
+
+  const maximumEncodedLength = Math.ceil(maximumBytes / 3) * 4;
+  if (
+    value.length < 4 ||
+    value.length > maximumEncodedLength ||
+    value.length % 4 !== 0 ||
+    !BASE64_PATTERN.test(value)
+  ) {
+    return false;
+  }
+
+  const paddingBytes = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+  const decodedLength = (value.length / 4) * 3 - paddingBytes;
+  if (decodedLength < minimumBytes || decodedLength > maximumBytes) return false;
+
+  if (paddingBytes === 2) {
+    const finalDataIndex = BASE64_ALPHABET.indexOf(value.at(-3) ?? '');
+    if (finalDataIndex < 0 || finalDataIndex % 16 !== 0) return false;
+  }
+  if (paddingBytes === 1) {
+    const finalDataIndex = BASE64_ALPHABET.indexOf(value.at(-2) ?? '');
+    if (finalDataIndex < 0 || finalDataIndex % 4 !== 0) return false;
+  }
+
+  return true;
+}
+
+function assertValidEnvelope(value: unknown): asserts value is CredentialEnvelope {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('invalid envelope');
+  }
+
+  const ownKeys = Reflect.ownKeys(value);
+  if (
+    ownKeys.length !== ENVELOPE_KEYS.length ||
+    ownKeys.some((key) => typeof key !== 'string' || !ENVELOPE_KEYS.includes(key as never))
+  ) {
+    throw new Error('invalid envelope keys');
+  }
+
+  const envelope = value as Record<(typeof ENVELOPE_KEYS)[number], unknown>;
+  if (
+    envelope.algorithm !== ALGORITHM ||
+    typeof envelope.keyVersion !== 'string' ||
+    envelope.keyVersion.length < 1 ||
+    envelope.keyVersion.length > 64 ||
+    envelope.keyVersion.trim() !== envelope.keyVersion ||
+    !isCanonicalBase64WithinDecodedBounds(
+      envelope.wrappedKey,
+      AES_256_KEY_BYTES,
+      AES_256_KEY_BYTES,
+    ) ||
+    !isCanonicalBase64WithinDecodedBounds(envelope.wrappedKeyIv, GCM_IV_BYTES, GCM_IV_BYTES) ||
+    !isCanonicalBase64WithinDecodedBounds(envelope.wrappedKeyTag, GCM_TAG_BYTES, GCM_TAG_BYTES) ||
+    !isCanonicalBase64WithinDecodedBounds(envelope.ciphertext, 1, MAX_CREDENTIAL_BYTES) ||
+    !isCanonicalBase64WithinDecodedBounds(envelope.iv, GCM_IV_BYTES, GCM_IV_BYTES) ||
+    !isCanonicalBase64WithinDecodedBounds(envelope.tag, GCM_TAG_BYTES, GCM_TAG_BYTES)
+  ) {
+    throw new Error('invalid envelope shape');
+  }
 }
 
 function encryptionMetadata(
@@ -67,7 +149,8 @@ function assertEncryptionContext(ownerId: string, provider: LlmProvider, keyVers
     ownerId.length > 256 ||
     !['FAKE', 'OPENAI', 'GEMINI'].includes(provider) ||
     keyVersion.length < 1 ||
-    keyVersion.length > 64
+    keyVersion.length > 64 ||
+    keyVersion.trim() !== keyVersion
   ) {
     throw new Error('invalid encryption context');
   }
@@ -176,6 +259,7 @@ export class CredentialVault {
     let keyMetadata: Buffer | undefined;
 
     try {
+      assertValidEnvelope(envelope);
       assertEncryptionContext(ownerId, provider, envelope.keyVersion);
       if (envelope.algorithm !== ALGORITHM || envelope.keyVersion !== this.#keyVersion) {
         throw new Error('unsupported envelope');

@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { loadRuntimeEnv } from './runtime-env.js';
 
@@ -47,6 +48,32 @@ describe('loadRuntimeEnv', () => {
     expect(loadRuntimeEnv(productionBase).NODE_ENV).toBe('production');
   });
 
+  it('keeps the master key accessible but absent from serialization and enumeration', () => {
+    const env = loadRuntimeEnv(productionBase);
+
+    expect(env.LLM_CREDENTIAL_MASTER_KEY).toBe(validMasterKey);
+    expect(JSON.stringify(env)).not.toContain(validMasterKey);
+    expect(JSON.stringify({ ...env })).not.toContain(validMasterKey);
+    expect(Object.keys(env)).not.toContain('LLM_CREDENTIAL_MASTER_KEY');
+    expect(Object.values(env)).not.toContain(validMasterKey);
+    expect(inspect(env)).not.toContain(validMasterKey);
+  });
+
+  it('never includes a rejected master key in validation errors', () => {
+    const rejectedSecret = `unsafe-secret-${'x'.repeat(80)}`;
+    let failure: unknown;
+
+    try {
+      loadRuntimeEnv({ ...productionBase, LLM_CREDENTIAL_MASTER_KEY: rejectedSecret });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeDefined();
+    expect(String(failure)).not.toContain(rejectedSecret);
+    expect(JSON.stringify(failure)).not.toContain(rejectedSecret);
+  });
+
   it.each([
     { LLM_CREDENTIAL_MASTER_KEY: '' },
     { LLM_CREDENTIAL_MASTER_KEY: Buffer.alloc(31).toString('base64') },
@@ -54,6 +81,15 @@ describe('loadRuntimeEnv', () => {
     { LLM_CREDENTIAL_KEY_VERSION: '' },
   ])('rejects missing or malformed credential encryption configuration in production', (patch) => {
     expect(() => loadRuntimeEnv({ ...productionBase, ...patch })).toThrow();
+  });
+
+  it('requires an explicit key version in production but defaults it outside production', () => {
+    const withoutKeyVersion = Object.fromEntries(
+      Object.entries(productionBase).filter(([key]) => key !== 'LLM_CREDENTIAL_KEY_VERSION'),
+    );
+
+    expect(() => loadRuntimeEnv(withoutKeyVersion)).toThrow();
+    expect(loadRuntimeEnv({ NODE_ENV: 'development' }).LLM_CREDENTIAL_KEY_VERSION).toBe('local-v1');
   });
 
   it('normalizes configured model allowlists', () => {
@@ -77,4 +113,14 @@ describe('loadRuntimeEnv', () => {
   ])('rejects unsafe LLM runtime configuration', (patch) => {
     expect(() => loadRuntimeEnv({ ...productionBase, ...patch })).toThrow();
   });
+
+  it.each(['', ' ', '1e3', '0x10', '1.5', 'NaN', 'Infinity', '+1', '-0'])(
+    'rejects a non-canonical LLM integer: %s',
+    (invalidInteger) => {
+      expect(() => loadRuntimeEnv({ ...productionBase, LLM_TIMEOUT_MS: invalidInteger })).toThrow();
+      expect(() =>
+        loadRuntimeEnv({ ...productionBase, LLM_MAX_COST_MINOR_UNITS: invalidInteger }),
+      ).toThrow();
+    },
+  );
 });

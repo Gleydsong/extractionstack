@@ -19,18 +19,33 @@ const modelAllowlist = (fallback: string) =>
     .string()
     .default(fallback)
     .transform((value, context) => {
-      const models = [...new Set(value.split(',').map((model) => model.trim()).filter(Boolean))];
-      if (
-        models.length < 1 ||
-        models.length > 50 ||
-        models.some((model) => model.length > 128)
-      ) {
+      const models = [
+        ...new Set(
+          value
+            .split(',')
+            .map((model) => model.trim())
+            .filter(Boolean),
+        ),
+      ];
+      if (models.length < 1 || models.length > 50 || models.some((model) => model.length > 128)) {
         context.addIssue({ code: z.ZodIssueCode.custom, message: 'invalid model allowlist' });
         return z.NEVER;
       }
 
       return Object.freeze(models);
     });
+
+const boundedCanonicalInteger = (minimum: number, maximum: number, fallback: number) =>
+  z
+    .union([
+      z.number().int(),
+      z
+        .string()
+        .regex(/^(0|[1-9]\d*)$/)
+        .transform(Number),
+    ])
+    .pipe(z.number().int().min(minimum).max(maximum))
+    .default(fallback);
 
 const RuntimeEnvBaseSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -63,18 +78,15 @@ const RuntimeEnvBaseSchema = z.object({
     (value) => (value === '' ? undefined : value),
     base64Encoded32Bytes.optional(),
   ),
-  LLM_CREDENTIAL_KEY_VERSION: z.string().trim().min(1).max(64).default('local-v1'),
+  LLM_CREDENTIAL_KEY_VERSION: z.string().trim().min(1).max(64).optional(),
   LLM_OPENAI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
-  LLM_GEMINI_BASE_URL: z
-    .string()
-    .url()
-    .default('https://generativelanguage.googleapis.com/v1beta'),
+  LLM_GEMINI_BASE_URL: z.string().url().default('https://generativelanguage.googleapis.com/v1beta'),
   LLM_OPENAI_MODEL_ALLOWLIST: modelAllowlist('gpt-5-mini'),
   LLM_GEMINI_MODEL_ALLOWLIST: modelAllowlist('gemini-2.5-flash'),
-  LLM_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
-  LLM_MAX_INPUT_TOKENS: z.coerce.number().int().min(1).max(1_000_000).default(32_000),
-  LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(1).max(1_000_000).default(4_096),
-  LLM_MAX_COST_MINOR_UNITS: z.coerce.number().int().min(0).max(1_000_000).default(500),
+  LLM_TIMEOUT_MS: boundedCanonicalInteger(1_000, 120_000, 30_000),
+  LLM_MAX_INPUT_TOKENS: boundedCanonicalInteger(1, 1_000_000, 32_000),
+  LLM_MAX_OUTPUT_TOKENS: boundedCanonicalInteger(1, 1_000_000, 4_096),
+  LLM_MAX_COST_MINOR_UNITS: boundedCanonicalInteger(0, 1_000_000, 500),
 });
 
 export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
@@ -93,17 +105,51 @@ export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'a real AUTH0_AUDIENCE is required' });
   }
   if (!env.LLM_CREDENTIAL_MASTER_KEY) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'an LLM credential master key is required' });
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'an LLM credential master key is required',
+    });
+  }
+  if (!env.LLM_CREDENTIAL_KEY_VERSION) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'an LLM credential key version is required',
+    });
   }
   for (const endpoint of [env.LLM_OPENAI_BASE_URL, env.LLM_GEMINI_BASE_URL]) {
     if (new URL(endpoint).protocol !== 'https:') {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'LLM provider URLs must use HTTPS' });
     }
   }
+}).transform((parsedEnv) => {
+  const env = {
+    ...parsedEnv,
+    LLM_CREDENTIAL_KEY_VERSION: parsedEnv.LLM_CREDENTIAL_KEY_VERSION ?? 'local-v1',
+  };
+  const masterKey = env.LLM_CREDENTIAL_MASTER_KEY;
+
+  if (masterKey !== undefined) {
+    Object.defineProperty(env, 'LLM_CREDENTIAL_MASTER_KEY', {
+      configurable: false,
+      enumerable: false,
+      value: masterKey,
+      writable: false,
+    });
+  }
+  Object.defineProperty(env, 'toJSON', {
+    configurable: false,
+    enumerable: false,
+    value: () => ({ ...env }),
+    writable: false,
+  });
+
+  return env;
 });
 
 export type RuntimeEnv = z.infer<typeof RuntimeEnvSchema>;
 
-export function loadRuntimeEnv(input: NodeJS.ProcessEnv | Record<string, string | undefined>): RuntimeEnv {
+export function loadRuntimeEnv(
+  input: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): RuntimeEnv {
   return RuntimeEnvSchema.parse(input);
 }

@@ -12,6 +12,10 @@ function createVault(key = masterKey, keyVersion = 'test-v1'): CredentialVault {
   return new CredentialVault(key, keyVersion);
 }
 
+function tamperBase64(value: string): string {
+  return `${value.startsWith('A') ? 'B' : 'A'}${value.slice(1)}`;
+}
+
 describe('CredentialVault', () => {
   it('round-trips a credential through envelope encryption', async () => {
     const vault = createVault();
@@ -64,7 +68,9 @@ describe('CredentialVault', () => {
       expect(failure).toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
       expect(failure).not.toHaveProperty('cause');
       expect(JSON.stringify(failure)).not.toContain('tampered-secret-bearing-input');
-      expect(Object.values(failure as object).join(' ')).not.toContain('tampered-secret-bearing-input');
+      expect(Object.values(failure as object).join(' ')).not.toContain(
+        'tampered-secret-bearing-input',
+      );
     }
   });
 
@@ -93,5 +99,117 @@ describe('CredentialVault', () => {
     expect(first.wrappedKey).not.toBe(second.wrappedKey);
     expect(first.iv).not.toBe(second.iv);
     expect(first.wrappedKeyIv).not.toBe(second.wrappedKeyIv);
+  });
+
+  it('returns exact cryptographic sizes in a frozen envelope', async () => {
+    const envelope = await createVault().encrypt('owner-a', 'OPENAI', 'sk-secret');
+
+    expect(Buffer.from(envelope.iv, 'base64')).toHaveLength(12);
+    expect(Buffer.from(envelope.tag, 'base64')).toHaveLength(16);
+    expect(Buffer.from(envelope.wrappedKeyIv, 'base64')).toHaveLength(12);
+    expect(Buffer.from(envelope.wrappedKeyTag, 'base64')).toHaveLength(16);
+    expect(Buffer.from(envelope.wrappedKey, 'base64')).toHaveLength(32);
+    expect(Object.isFrozen(envelope)).toBe(true);
+    expect(Reflect.set(envelope, 'keyVersion', 'mutated')).toBe(false);
+    expect(envelope.keyVersion).toBe('test-v1');
+  });
+
+  it.each(['ciphertext', 'iv', 'tag'] as const)(
+    'fails safely when the credential GCM %s is tampered',
+    async (field) => {
+      const vault = createVault();
+      const envelope = await vault.encrypt('owner-a', 'OPENAI', 'sk-secret');
+
+      await expect(
+        vault.decrypt('owner-a', 'OPENAI', {
+          ...envelope,
+          [field]: tamperBase64(envelope[field]),
+        }),
+      ).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
+    },
+  );
+
+  it.each(['wrappedKey', 'wrappedKeyIv', 'wrappedKeyTag'] as const)(
+    'fails safely when the data-key GCM %s is tampered',
+    async (field) => {
+      const vault = createVault();
+      const envelope = await vault.encrypt('owner-a', 'OPENAI', 'sk-secret');
+
+      await expect(
+        vault.decrypt('owner-a', 'OPENAI', {
+          ...envelope,
+          [field]: tamperBase64(envelope[field]),
+        }),
+      ).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
+    },
+  );
+
+  it('rejects unknown envelope keys before decryption', async () => {
+    const vault = createVault();
+    const envelope = await vault.encrypt('owner-a', 'OPENAI', 'sk-secret');
+
+    await expect(
+      vault.decrypt('owner-a', 'OPENAI', {
+        ...envelope,
+        unexpectedSecret: 'must-not-be-accepted',
+      } as CredentialEnvelope),
+    ).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
+  });
+
+  it.each([
+    ['wrappedKey', Buffer.alloc(31).toString('base64')],
+    ['wrappedKeyIv', Buffer.alloc(11).toString('base64')],
+    ['wrappedKeyTag', Buffer.alloc(15).toString('base64')],
+    ['iv', Buffer.alloc(11).toString('base64')],
+    ['tag', Buffer.alloc(15).toString('base64')],
+    ['ciphertext', ''],
+  ] as const)('rejects an envelope with the wrong decoded %s length', async (field, value) => {
+    const vault = createVault();
+    const envelope = await vault.encrypt('owner-a', 'OPENAI', 'sk-secret');
+
+    await expect(
+      vault.decrypt('owner-a', 'OPENAI', { ...envelope, [field]: value }),
+    ).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
+  });
+
+  it('rejects oversized ciphertext before decoding it', async () => {
+    const vault = createVault();
+    const envelope = await vault.encrypt('owner-a', 'OPENAI', 'sk-secret');
+
+    await expect(
+      vault.decrypt('owner-a', 'OPENAI', {
+        ...envelope,
+        ciphertext: 'A'.repeat(87_388),
+      }),
+    ).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
+  });
+
+  it('rejects noncanonical base64 before decryption', async () => {
+    const vault = createVault();
+    const envelope = await vault.encrypt('owner-a', 'OPENAI', 'sk-secret');
+    const noncanonicalTag = `${'A'.repeat(21)}B==`;
+
+    expect(Buffer.from(noncanonicalTag, 'base64').toString('base64')).not.toBe(noncanonicalTag);
+    await expect(
+      vault.decrypt('owner-a', 'OPENAI', { ...envelope, tag: noncanonicalTag }),
+    ).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
+  });
+
+  it('rejects invalid algorithm and key-version shapes', async () => {
+    const vault = createVault();
+    const envelope = await vault.encrypt('owner-a', 'OPENAI', 'sk-secret');
+
+    await expect(
+      vault.decrypt('owner-a', 'OPENAI', {
+        ...envelope,
+        algorithm: 'AES-128-GCM',
+      } as unknown as CredentialEnvelope),
+    ).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
+    await expect(
+      vault.decrypt('owner-a', 'OPENAI', {
+        ...envelope,
+        keyVersion: 'x'.repeat(65),
+      }),
+    ).rejects.toMatchObject({ code: 'CREDENTIAL_DECRYPTION_FAILED' });
   });
 });
