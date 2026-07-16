@@ -13,7 +13,6 @@ import type {
 import {
   assertGenerationInput,
   assertValidationInput,
-  capabilities,
   composePromptLayers,
   estimateUsage,
   fetchJson,
@@ -49,12 +48,24 @@ const GeminiResponseSchema = z
       .object({
         promptTokenCount: z.number().int().nonnegative(),
         candidatesTokenCount: z.number().int().nonnegative().default(0),
+        thoughtsTokenCount: z.number().int().nonnegative().optional(),
+        totalTokenCount: z.number().int().nonnegative(),
       })
-      .passthrough(),
+      .passthrough()
+      .superRefine((value, context) => {
+        const minimumTotal =
+          value.promptTokenCount + value.candidatesTokenCount + (value.thoughtsTokenCount ?? 0);
+        if (value.totalTokenCount < minimumTotal) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['totalTokenCount'],
+            message: 'Total token count is smaller than accounted token components',
+          });
+        }
+      }),
   })
   .passthrough();
 
-const GEMINI_CAPABILITIES = capabilities('GEMINI', ['OAUTH', 'API_KEY', 'PLATFORM_CREDITS'], true);
 const BLOCKED_REASONS = new Set([
   'SAFETY',
   'RECITATION',
@@ -69,11 +80,16 @@ export class GeminiProviderAdapter implements LlmProviderAdapter {
   private readonly dependencies: ProviderAdapterDependencies;
 
   constructor(dependencies: ProviderAdapterDependencies) {
-    this.dependencies = parseDependencies(dependencies);
+    this.dependencies = parseDependencies(
+      dependencies,
+      this.provider,
+      ['OAUTH', 'API_KEY', 'PLATFORM_CREDITS'],
+      true,
+    );
   }
 
   getCapabilities(): ProviderCapabilities {
-    return GEMINI_CAPABILITIES;
+    return this.dependencies.capabilities;
   }
 
   async validateConnection(input: ValidateConnectionInput): Promise<ConnectionValidation> {
@@ -82,11 +98,14 @@ export class GeminiProviderAdapter implements LlmProviderAdapter {
   }
 
   async estimateUsage(input: GenerationInput): Promise<UsageEstimate> {
-    return estimateUsage(assertGenerationInput(this.provider, input));
+    return estimateUsage(
+      assertGenerationInput(this.provider, input, this.dependencies.capabilities),
+      this.dependencies.capabilities,
+    );
   }
 
   async generatePrompt(input: GenerationInput): Promise<NormalizedGeneration> {
-    const parsedInput = assertGenerationInput(this.provider, input);
+    const parsedInput = assertGenerationInput(this.provider, input, this.dependencies.capabilities);
     const prompt = composePromptLayers(parsedInput);
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (parsedInput.credential.mode === 'API_KEY') {
@@ -130,7 +149,7 @@ export class GeminiProviderAdapter implements LlmProviderAdapter {
       providerRequestId: safeId(response.data.responseId) ?? headerRequestId,
       usage: usage(
         response.data.usageMetadata.promptTokenCount,
-        response.data.usageMetadata.candidatesTokenCount,
+        response.data.usageMetadata.totalTokenCount - response.data.usageMetadata.promptTokenCount,
       ),
     });
   }

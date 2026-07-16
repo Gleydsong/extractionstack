@@ -1,4 +1,9 @@
-import type { CredentialMode, LlmProvider } from '@extractionstack/shared';
+import {
+  CredentialModeSchema,
+  LlmProviderSchema,
+  type CredentialMode,
+  type LlmProvider,
+} from '@extractionstack/shared';
 import { z } from 'zod';
 import {
   GenerationInputSchema,
@@ -17,6 +22,7 @@ export type ProviderAdapterDependencies = Readonly<{
   baseUrl: URL;
   timeoutMs: number;
   maxOutputCharacters: number;
+  capabilities: ProviderCapabilities;
 }>;
 
 const DependenciesSchema = z
@@ -25,29 +31,107 @@ const DependenciesSchema = z
     baseUrl: z.instanceof(URL),
     timeoutMs: z.number().int().positive().max(300_000),
     maxOutputCharacters: z.number().int().positive().max(100_000),
+    capabilities: z.unknown(),
   })
   .strict();
+
+const ProviderCapabilitiesSchema = z
+  .object({
+    provider: LlmProviderSchema,
+    credentialModes: z.array(CredentialModeSchema).min(1).max(3),
+    models: z.array(z.string().trim().min(1).max(128)).min(1),
+    contextWindowTokens: z.number().int().positive(),
+    maxOutputTokens: z.number().int().positive(),
+    supportsStructuredOutput: z.boolean(),
+    supportsCancellation: z.boolean(),
+    supportsCredentialRefresh: z.boolean(),
+    oauthScopes: z.array(z.string().trim().min(1).max(160)).max(30),
+    previewEligible: z.boolean(),
+    pricingMetadataVersion: z.string().trim().min(1).max(64),
+    enabled: z.boolean(),
+    circuitBreakerOpen: z.boolean(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (new Set(value.models).size !== value.models.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['models'],
+        message: 'Duplicate model',
+      });
+    }
+    if (value.maxOutputTokens > value.contextWindowTokens) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['maxOutputTokens'],
+        message: 'Output limit exceeds context window',
+      });
+    }
+  });
 
 export type NormalizedFinishReason = 'complete' | 'length' | 'blocked';
 
 export function parseDependencies(
   dependencies: ProviderAdapterDependencies,
+  expectedProvider: LlmProvider,
+  expectedModes: readonly CredentialMode[],
+  requiresStructuredOutput: boolean,
 ): ProviderAdapterDependencies {
   const parsed = DependenciesSchema.safeParse(dependencies);
   if (!parsed.success) {
     throw new ProviderFailure('INPUT_INVALID');
   }
+  const capabilities = parseCapabilities(
+    dependencies.capabilities,
+    expectedProvider,
+    expectedModes,
+    requiresStructuredOutput,
+  );
   const baseUrl = new URL(dependencies.baseUrl);
   if (!baseUrl.pathname.endsWith('/')) baseUrl.pathname += '/';
-  return Object.freeze({ ...dependencies, baseUrl });
+  return Object.freeze({ ...dependencies, baseUrl, capabilities });
+}
+
+export function parseCapabilities(
+  input: ProviderCapabilities,
+  expectedProvider: LlmProvider,
+  expectedModes: readonly CredentialMode[],
+  requiresStructuredOutput: boolean,
+): ProviderCapabilities {
+  const parsed = ProviderCapabilitiesSchema.safeParse(input);
+  const value = parsed.success ? parsed.data : null;
+  if (
+    !value ||
+    value.provider !== expectedProvider ||
+    value.credentialModes.length !== expectedModes.length ||
+    !value.credentialModes.every((mode, index) => mode === expectedModes[index]) ||
+    value.supportsStructuredOutput !== requiresStructuredOutput ||
+    value.supportsCancellation ||
+    value.supportsCredentialRefresh
+  ) {
+    throw new ProviderFailure('INPUT_INVALID');
+  }
+  return Object.freeze({
+    ...value,
+    credentialModes: Object.freeze([...value.credentialModes]),
+    models: Object.freeze([...value.models]),
+    oauthScopes: Object.freeze([...value.oauthScopes]),
+  });
 }
 
 export function assertGenerationInput(
   expectedProvider: LlmProvider,
   input: GenerationInput,
+  configuredCapabilities: ProviderCapabilities,
 ): GenerationInput {
   const parsed = GenerationInputSchema.safeParse(input);
   if (!parsed.success || parsed.data.provider !== expectedProvider) {
+    throw new ProviderFailure('INPUT_INVALID');
+  }
+  if (!configuredCapabilities.models.includes(parsed.data.model)) {
+    throw new ProviderFailure('MODEL_UNAVAILABLE');
+  }
+  if (parsed.data.maxOutputTokens > configuredCapabilities.maxOutputTokens) {
     throw new ProviderFailure('INPUT_INVALID');
   }
   return parsed.data;
@@ -62,29 +146,10 @@ export function assertValidationInput(
   }
 }
 
-export function capabilities(
-  provider: LlmProvider,
-  credentialModes: readonly CredentialMode[],
-  supportsStructuredOutput: boolean,
-): ProviderCapabilities {
-  return Object.freeze({
-    provider,
-    credentialModes: Object.freeze([...credentialModes]),
-    models: Object.freeze([]),
-    contextWindowTokens: 1,
-    maxOutputTokens: 1_000_000,
-    supportsStructuredOutput,
-    supportsCancellation: false,
-    supportsCredentialRefresh: credentialModes.includes('OAUTH'),
-    oauthScopes: Object.freeze([]),
-    previewEligible: true,
-    pricingMetadataVersion: 'unconfigured',
-    enabled: true,
-    circuitBreakerOpen: false,
-  });
-}
-
-export function estimateUsage(input: GenerationInput): UsageEstimate {
+export function estimateUsage(
+  input: GenerationInput,
+  configuredCapabilities: ProviderCapabilities,
+): UsageEstimate {
   const inputCharacters = input.layers.reduce((total, layer) => total + layer.content.length, 0);
   const inputTokens = Math.ceil(inputCharacters / 4);
   return Object.freeze({
@@ -94,7 +159,7 @@ export function estimateUsage(input: GenerationInput): UsageEstimate {
       totalTokens: inputTokens + input.maxOutputTokens,
       estimatedCostMicros: null,
     }),
-    pricingMetadataVersion: 'unconfigured',
+    pricingMetadataVersion: configuredCapabilities.pricingMetadataVersion,
   });
 }
 
@@ -167,20 +232,14 @@ export async function fetchJson(
       throw classifyHttpStatus(response.status, providerRequestId);
     }
 
-    let raw: string;
-    try {
-      raw = await Promise.race([response.text(), aborted]);
-    } catch (error) {
-      if (error instanceof ProviderFailure) throw error;
-      if (controller.signal.aborted || isAbortError(error)) {
-        throw new ProviderFailure('TIMEOUT', { retryable: true });
-      }
-      throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
-    }
-    const maxEnvelopeCharacters = Math.max(4_096, dependencies.maxOutputCharacters * 4);
-    if (raw.length > maxEnvelopeCharacters) {
-      throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
-    }
+    const maxEnvelopeBytes = Math.max(4_096, dependencies.maxOutputCharacters * 4);
+    const raw = await readBoundedBody(
+      response,
+      maxEnvelopeBytes,
+      aborted,
+      controller,
+      providerRequestId,
+    );
     try {
       return Object.freeze({ data: JSON.parse(raw) as unknown, providerRequestId });
     } catch {
@@ -195,6 +254,9 @@ function classifyHttpStatus(status: number, providerRequestId: string | null): P
   if (status === 401) return new ProviderFailure('AUTHENTICATION_FAILED', { providerRequestId });
   if (status === 403) return new ProviderFailure('AUTHORIZATION_FAILED', { providerRequestId });
   if (status === 404) return new ProviderFailure('MODEL_UNAVAILABLE', { providerRequestId });
+  if (status === 408) {
+    return new ProviderFailure('TIMEOUT', { retryable: true, providerRequestId });
+  }
   if (status === 429 || status >= 500) {
     return new ProviderFailure('PROVIDER_UNAVAILABLE', {
       retryable: true,
@@ -202,6 +264,91 @@ function classifyHttpStatus(status: number, providerRequestId: string | null): P
     });
   }
   return new ProviderFailure('INPUT_INVALID', { providerRequestId });
+}
+
+async function readBoundedBody(
+  response: Response,
+  maxBytes: number,
+  aborted: Promise<never>,
+  controller: AbortController,
+  providerRequestId: string | null,
+): Promise<string> {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    controller.abort();
+    throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
+  }
+  if (!response.body) {
+    let raw: string;
+    try {
+      raw = await Promise.race([response.text(), aborted]);
+    } catch (error) {
+      throw classifyBodyReadFailure(error, controller, providerRequestId);
+    }
+    if (new TextEncoder().encode(raw).byteLength > maxBytes) {
+      controller.abort();
+      throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
+    }
+    return raw;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const decodedChunks: string[] = [];
+  let receivedBytes = 0;
+  let streamComplete = false;
+  try {
+    while (!streamComplete) {
+      let result: Awaited<ReturnType<typeof reader.read>>;
+      try {
+        result = await Promise.race([reader.read(), aborted]);
+      } catch (error) {
+        throw classifyBodyReadFailure(error, controller, providerRequestId);
+      }
+      if (result.done) {
+        streamComplete = true;
+        continue;
+      }
+      receivedBytes += result.value.byteLength;
+      if (receivedBytes > maxBytes) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The normalized oversized-response failure remains authoritative.
+        }
+        controller.abort();
+        throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
+      }
+      try {
+        decodedChunks.push(decoder.decode(result.value, { stream: true }));
+      } catch {
+        throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
+      }
+    }
+    try {
+      decodedChunks.push(decoder.decode());
+    } catch {
+      throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
+    }
+    return decodedChunks.join('');
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function classifyBodyReadFailure(
+  error: unknown,
+  controller: AbortController,
+  providerRequestId: string | null,
+): ProviderFailure {
+  if (error instanceof ProviderFailure) return error;
+  if (controller.signal.aborted || isAbortError(error)) {
+    return new ProviderFailure('TIMEOUT', { retryable: true, providerRequestId });
+  }
+  return new ProviderFailure('PROVIDER_UNAVAILABLE', {
+    retryable: true,
+    providerRequestId,
+  });
 }
 
 function safeRequestId(headers: Headers): string | null {

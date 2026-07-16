@@ -1,9 +1,34 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GenerationInput, LlmProviderAdapter } from './provider-adapter';
+import type { GenerationInput, LlmProviderAdapter, ProviderCapabilities } from './provider-adapter';
 import { FakeProviderAdapter } from './fake-provider.adapter';
 import { GeminiProviderAdapter } from './gemini-provider.adapter';
 import { OpenAiProviderAdapter } from './openai-provider.adapter';
 import { ProviderFailure } from './provider-errors';
+import { ProviderRegistry } from './provider-registry';
+
+const capabilitiesFixture = (provider: ProviderCapabilities['provider']): ProviderCapabilities => {
+  const credentialModes = {
+    FAKE: ['PLATFORM_CREDITS'],
+    OPENAI: ['API_KEY', 'PLATFORM_CREDITS'],
+    GEMINI: ['OAUTH', 'API_KEY', 'PLATFORM_CREDITS'],
+  }[provider] as ProviderCapabilities['credentialModes'];
+  return {
+    provider,
+    credentialModes,
+    models: ['configured-test-model'],
+    contextWindowTokens: 8_192,
+    maxOutputTokens: 1_024,
+    supportsStructuredOutput: provider !== 'FAKE',
+    supportsCancellation: false,
+    supportsCredentialRefresh: false,
+    oauthScopes:
+      provider === 'GEMINI' ? ['https://www.googleapis.com/auth/generative-language'] : [],
+    previewEligible: true,
+    pricingMetadataVersion: 'test-pricing-v1',
+    enabled: true,
+    circuitBreakerOpen: false,
+  };
+};
 
 const wizardFixture = {
   extractionId: 'cm1234567890abcdef',
@@ -42,6 +67,37 @@ const jsonResponse = (body: unknown, status = 200, headers?: HeadersInit): Respo
     status,
     headers: { 'content-type': 'application/json', ...headers },
   });
+
+const streamedResponse = (
+  chunks: readonly Uint8Array[],
+  options: Readonly<{
+    headers?: HeadersInit;
+    onCancel?: () => void;
+    rejectAfterChunks?: number;
+  }> = {},
+): Response => {
+  let index = 0;
+  return new Response(
+    new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (options.rejectAfterChunks === index) {
+            controller.error(new Error('secret native stream failure'));
+            return;
+          }
+          const chunk = chunks[index++];
+          if (chunk) controller.enqueue(chunk);
+          else controller.close();
+        },
+        cancel() {
+          options.onCancel?.();
+        },
+      },
+      { highWaterMark: 0 },
+    ),
+    { status: 200, headers: options.headers },
+  );
+};
 
 const openAiSuccess = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: 'resp_safe_123',
@@ -114,10 +170,15 @@ function providerContract(contract: ContractCase): void {
 providerContract({
   name: 'fake',
   input: generationFixture('FAKE', 'PLATFORM_CREDITS'),
-  createSuccess: () => new FakeProviderAdapter({ allowTestProvider: true }),
+  createSuccess: () =>
+    new FakeProviderAdapter({
+      allowTestProvider: true,
+      capabilities: capabilitiesFixture('FAKE'),
+    }),
   createRateLimited: () =>
     new FakeProviderAdapter({
       allowTestProvider: true,
+      capabilities: capabilitiesFixture('FAKE'),
       failure: new ProviderFailure('PROVIDER_UNAVAILABLE', { retryable: true }),
     }),
 });
@@ -131,6 +192,7 @@ providerContract({
       baseUrl: new URL('https://openai.test/v1/'),
       timeoutMs: 100,
       maxOutputCharacters: 1_000,
+      capabilities: capabilitiesFixture('OPENAI'),
     }),
   createRateLimited: () =>
     new OpenAiProviderAdapter({
@@ -138,6 +200,7 @@ providerContract({
       baseUrl: new URL('https://openai.test/v1/'),
       timeoutMs: 100,
       maxOutputCharacters: 1_000,
+      capabilities: capabilitiesFixture('OPENAI'),
     }),
 });
 
@@ -150,6 +213,7 @@ providerContract({
       baseUrl: new URL('https://gemini.test/v1beta/'),
       timeoutMs: 100,
       maxOutputCharacters: 1_000,
+      capabilities: capabilitiesFixture('GEMINI'),
     }),
   createRateLimited: () =>
     new GeminiProviderAdapter({
@@ -157,6 +221,7 @@ providerContract({
       baseUrl: new URL('https://gemini.test/v1beta/'),
       timeoutMs: 100,
       maxOutputCharacters: 1_000,
+      capabilities: capabilitiesFixture('GEMINI'),
     }),
 });
 
@@ -172,6 +237,7 @@ describe('FakeProviderAdapter', () => {
       () =>
         new FakeProviderAdapter({
           allowTestProvider: true,
+          capabilities: capabilitiesFixture('FAKE'),
           usage: {
             inputTokens: 7,
             outputTokens: 3,
@@ -182,11 +248,26 @@ describe('FakeProviderAdapter', () => {
     ).toThrowError(expect.objectContaining({ code: 'INPUT_INVALID' }));
   });
 
+  it('returns frozen configured capabilities compatible with ProviderRegistry', () => {
+    const configured = capabilitiesFixture('FAKE');
+    const adapter = new FakeProviderAdapter({
+      allowTestProvider: true,
+      capabilities: configured,
+    });
+
+    expect(adapter.getCapabilities()).toEqual(configured);
+    expect(Object.isFrozen(adapter.getCapabilities())).toBe(true);
+    expect(
+      () => new ProviderRegistry([adapter.getCapabilities()], { allowTestProvider: true }),
+    ).not.toThrow();
+  });
+
   it('is deterministic and supports configured delay and usage', async () => {
     vi.useFakeTimers();
     try {
       const adapter = new FakeProviderAdapter({
         allowTestProvider: true,
+        capabilities: capabilitiesFixture('FAKE'),
         delayMs: 25,
         content: 'Resposta determinística.',
         usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10, estimatedCostMicros: 0 },
@@ -212,6 +293,7 @@ describe('OpenAiProviderAdapter', () => {
     baseUrl: new URL('https://openai.test/v1/'),
     timeoutMs: 20,
     maxOutputCharacters,
+    capabilities: capabilitiesFixture('OPENAI'),
   });
 
   it('uses the Responses API with bearer auth, separated roles, no tools and bounded output', async () => {
@@ -248,6 +330,53 @@ describe('OpenAiProviderAdapter', () => {
           '[task]\nProduza um prompt claro.\n\n[source-context]\nContexto não confiável.\n\n[response-contract]\nRetorne somente linguagem natural.',
       },
     ]);
+  });
+
+  it('uses bearer auth for platform credentials without query secrets', async () => {
+    const fetch = vi.fn(async () => jsonResponse(openAiSuccess()));
+    const adapter = new OpenAiProviderAdapter(dependencies(fetch));
+
+    await adapter.generatePrompt(generationFixture('OPENAI', 'PLATFORM_CREDITS'));
+
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(String(url)).not.toContain('test-secret');
+    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer test-secret');
+  });
+
+  it('returns exact frozen capabilities compatible with ProviderRegistry', () => {
+    const configured = capabilitiesFixture('OPENAI');
+    const adapter = new OpenAiProviderAdapter({
+      ...dependencies(vi.fn()),
+      capabilities: configured,
+    });
+
+    expect(adapter.getCapabilities()).toEqual(configured);
+    expect(Object.isFrozen(adapter.getCapabilities())).toBe(true);
+    expect(() => new ProviderRegistry([adapter.getCapabilities()])).not.toThrow();
+  });
+
+  it.each([
+    [{ ...capabilitiesFixture('OPENAI'), provider: 'GEMINI' }, 'provider mismatch'],
+    [
+      { ...capabilitiesFixture('OPENAI'), credentialModes: ['API_KEY'] },
+      'credential mode mismatch',
+    ],
+    [
+      { ...capabilitiesFixture('OPENAI'), supportsCredentialRefresh: true },
+      'unimplemented refresh',
+    ],
+    [
+      { ...capabilitiesFixture('OPENAI'), supportsCancellation: true },
+      'unimplemented cancellation',
+    ],
+  ] as const)('rejects invalid capabilities: %s', (capabilities) => {
+    expect(
+      () =>
+        new OpenAiProviderAdapter({
+          ...dependencies(vi.fn()),
+          capabilities: capabilities as ProviderCapabilities,
+        }),
+    ).toThrowError(expect.objectContaining({ code: 'INPUT_INVALID' }));
   });
 
   it('preserves a base URL path without requiring a trailing slash', async () => {
@@ -303,6 +432,90 @@ describe('OpenAiProviderAdapter', () => {
     );
 
     await expect(adapter.generatePrompt(input)).rejects.toMatchObject({ code, retryable });
+  });
+
+  it('classifies HTTP 408 as a retryable timeout with safe request ID', async () => {
+    const adapter = new OpenAiProviderAdapter(
+      dependencies(
+        vi.fn(async () =>
+          jsonResponse({ error: 'secret timeout body' }, 408, { 'x-request-id': 'req_408' }),
+        ),
+      ),
+    );
+
+    await expect(adapter.generatePrompt(input)).rejects.toMatchObject({
+      code: 'TIMEOUT',
+      retryable: true,
+      providerRequestId: 'req_408',
+      message: 'TIMEOUT',
+    });
+  });
+
+  it('classifies a pre-header network rejection as transient without leaking details', async () => {
+    const adapter = new OpenAiProviderAdapter(
+      dependencies(vi.fn(async () => Promise.reject(new Error('secret network detail')))),
+    );
+
+    await expect(adapter.generatePrompt(input)).rejects.toMatchObject({
+      code: 'PROVIDER_UNAVAILABLE',
+      retryable: true,
+      message: 'PROVIDER_UNAVAILABLE',
+    });
+  });
+
+  it('classifies response-body stream rejection as transient and preserves safe request ID', async () => {
+    const encoded = new TextEncoder().encode(JSON.stringify(openAiSuccess()));
+    const adapter = new OpenAiProviderAdapter(
+      dependencies(
+        vi.fn(async () =>
+          streamedResponse([encoded.subarray(0, 20)], {
+            headers: { 'x-request-id': 'req_stream_failure' },
+            rejectAfterChunks: 1,
+          }),
+        ),
+      ),
+    );
+
+    await expect(adapter.generatePrompt(input)).rejects.toMatchObject({
+      code: 'PROVIDER_UNAVAILABLE',
+      retryable: true,
+      providerRequestId: 'req_stream_failure',
+      message: 'PROVIDER_UNAVAILABLE',
+    });
+  });
+
+  it('accepts a multi-chunk response exactly at the byte ceiling', async () => {
+    const raw = JSON.stringify(openAiSuccess()).padEnd(4_096, ' ');
+    const encoded = new TextEncoder().encode(raw);
+    const adapter = new OpenAiProviderAdapter(
+      dependencies(
+        vi.fn(async () => streamedResponse([encoded.subarray(0, 2_000), encoded.subarray(2_000)])),
+      ),
+    );
+
+    await expect(adapter.generatePrompt(input)).resolves.toMatchObject({
+      content: 'Prompt universal de teste.',
+    });
+  });
+
+  it('cancels and rejects a multi-chunk body as soon as it exceeds the byte ceiling', async () => {
+    const cancel = vi.fn();
+    const encoded = new TextEncoder().encode('x'.repeat(4_097));
+    const adapter = new OpenAiProviderAdapter(
+      dependencies(
+        vi.fn(async () =>
+          streamedResponse([encoded.subarray(0, 4_000), encoded.subarray(4_000)], {
+            onCancel: cancel,
+          }),
+        ),
+      ),
+    );
+
+    await expect(adapter.generatePrompt(input)).rejects.toMatchObject({
+      code: 'INVALID_RESPONSE',
+      retryable: false,
+    });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -405,11 +618,13 @@ describe('GeminiProviderAdapter', () => {
     baseUrl: new URL('https://gemini.test/v1beta/'),
     timeoutMs: 20,
     maxOutputCharacters,
+    capabilities: capabilitiesFixture('GEMINI'),
   });
 
   it.each([
     ['API_KEY', 'x-goog-api-key'],
     ['OAUTH', 'authorization'],
+    ['PLATFORM_CREDITS', 'authorization'],
   ] as const)(
     'uses header auth for %s and never puts credentials in the URL',
     async (mode, header) => {
@@ -424,7 +639,7 @@ describe('GeminiProviderAdapter', () => {
       );
       expect(String(url)).not.toContain('test-secret');
       expect(new Headers(init?.headers).get(header)).toBe(
-        mode === 'OAUTH' ? 'Bearer test-secret' : 'test-secret',
+        mode === 'API_KEY' ? 'test-secret' : 'Bearer test-secret',
       );
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       expect(body).toMatchObject({
@@ -442,6 +657,18 @@ describe('GeminiProviderAdapter', () => {
       expect(body).not.toHaveProperty('tools');
     },
   );
+
+  it('returns exact frozen capabilities compatible with ProviderRegistry', () => {
+    const configured = capabilitiesFixture('GEMINI');
+    const adapter = new GeminiProviderAdapter({
+      ...dependencies(vi.fn()),
+      capabilities: configured,
+    });
+
+    expect(adapter.getCapabilities()).toEqual(configured);
+    expect(Object.isFrozen(adapter.getCapabilities())).toBe(true);
+    expect(() => new ProviderRegistry([adapter.getCapabilities()])).not.toThrow();
+  });
 
   it('preserves the v1beta base path without requiring a trailing slash', async () => {
     const fetch = vi.fn(async () => jsonResponse(geminiSuccess()));
@@ -570,6 +797,54 @@ describe('GeminiProviderAdapter', () => {
     await expect(
       adapter.generatePrompt(generationFixture('GEMINI', 'API_KEY')),
     ).rejects.toMatchObject({ code: 'INVALID_RESPONSE', retryable: false });
+  });
+
+  it('accounts for Gemini thinking tokens using the provider total', async () => {
+    const adapter = new GeminiProviderAdapter(
+      dependencies(
+        vi.fn(async () =>
+          jsonResponse(
+            geminiSuccess({
+              usageMetadata: {
+                promptTokenCount: 20,
+                candidatesTokenCount: 10,
+                thoughtsTokenCount: 5,
+                totalTokenCount: 35,
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await expect(
+      adapter.generatePrompt(generationFixture('GEMINI', 'API_KEY')),
+    ).resolves.toMatchObject({
+      usage: { inputTokens: 20, outputTokens: 15, totalTokens: 35 },
+    });
+  });
+
+  it.each([
+    { promptTokenCount: 20, candidatesTokenCount: 10, totalTokenCount: 25 },
+    {
+      promptTokenCount: 20,
+      candidatesTokenCount: 10,
+      thoughtsTokenCount: 6,
+      totalTokenCount: 35,
+    },
+    { promptTokenCount: 20, candidatesTokenCount: 10 },
+  ])('rejects malformed Gemini usage totals safely: %o', async (usageMetadata) => {
+    const adapter = new GeminiProviderAdapter(
+      dependencies(vi.fn(async () => jsonResponse(geminiSuccess({ usageMetadata })))),
+    );
+
+    await expect(
+      adapter.generatePrompt(generationFixture('GEMINI', 'API_KEY')),
+    ).rejects.toMatchObject({
+      code: 'INVALID_RESPONSE',
+      retryable: false,
+      message: 'INVALID_RESPONSE',
+    });
   });
 
   it('classifies timeout without leaking native abort details', async () => {

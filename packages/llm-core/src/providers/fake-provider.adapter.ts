@@ -15,21 +15,21 @@ import {
   assertBoundedText,
   assertGenerationInput,
   assertValidationInput,
-  capabilities,
   estimateUsage,
+  parseCapabilities,
   toPreview,
 } from './provider-adapter-helpers';
 import { ProviderFailure } from './provider-errors';
 
 export type FakeProviderOptions = Readonly<{
   allowTestProvider?: boolean;
+  capabilities?: ProviderCapabilities;
   content?: string;
   delayMs?: number;
   failure?: ProviderFailure;
   usage?: NormalizedUsage;
 }>;
 
-const FAKE_CAPABILITIES = capabilities('FAKE', ['PLATFORM_CREDITS'], false);
 const DEFAULT_USAGE: NormalizedUsage = Object.freeze({
   inputTokens: 20,
   outputTokens: 10,
@@ -43,11 +43,21 @@ export class FakeProviderAdapter implements LlmProviderAdapter {
   private readonly delayMs: number;
   private readonly failure?: ProviderFailure;
   private readonly configuredUsage: NormalizedUsage;
+  private readonly configuredCapabilities: ProviderCapabilities;
 
   constructor(options: FakeProviderOptions = {}) {
     if (options.allowTestProvider !== true) {
       throw new ProviderFailure('INPUT_INVALID');
     }
+    if (!options.capabilities) {
+      throw new ProviderFailure('INPUT_INVALID');
+    }
+    this.configuredCapabilities = parseCapabilities(
+      options.capabilities,
+      this.provider,
+      ['PLATFORM_CREDITS'],
+      false,
+    );
     if (
       options.delayMs !== undefined &&
       (!Number.isInteger(options.delayMs) || options.delayMs < 0)
@@ -65,7 +75,7 @@ export class FakeProviderAdapter implements LlmProviderAdapter {
   }
 
   getCapabilities(): ProviderCapabilities {
-    return FAKE_CAPABILITIES;
+    return this.configuredCapabilities;
   }
 
   async validateConnection(input: ValidateConnectionInput): Promise<ConnectionValidation> {
@@ -74,12 +84,12 @@ export class FakeProviderAdapter implements LlmProviderAdapter {
   }
 
   async estimateUsage(input: GenerationInput): Promise<UsageEstimate> {
-    assertGenerationInput(this.provider, input);
-    return estimateUsage(input);
+    assertGenerationInput(this.provider, input, this.configuredCapabilities);
+    return estimateUsage(input, this.configuredCapabilities);
   }
 
   async generatePrompt(input: GenerationInput): Promise<NormalizedGeneration> {
-    assertGenerationInput(this.provider, input);
+    assertGenerationInput(this.provider, input, this.configuredCapabilities);
     if (this.delayMs > 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
     }

@@ -13,7 +13,6 @@ import type {
 import {
   assertGenerationInput,
   assertValidationInput,
-  capabilities,
   composePromptLayers,
   estimateUsage,
   fetchJson,
@@ -56,18 +55,21 @@ const OpenAiResponseSchema = z
   })
   .passthrough();
 
-const OPENAI_CAPABILITIES = capabilities('OPENAI', ['API_KEY', 'PLATFORM_CREDITS'], true);
-
 export class OpenAiProviderAdapter implements LlmProviderAdapter {
   readonly provider = 'OPENAI' as const;
   private readonly dependencies: ProviderAdapterDependencies;
 
   constructor(dependencies: ProviderAdapterDependencies) {
-    this.dependencies = parseDependencies(dependencies);
+    this.dependencies = parseDependencies(
+      dependencies,
+      this.provider,
+      ['API_KEY', 'PLATFORM_CREDITS'],
+      true,
+    );
   }
 
   getCapabilities(): ProviderCapabilities {
-    return OPENAI_CAPABILITIES;
+    return this.dependencies.capabilities;
   }
 
   async validateConnection(input: ValidateConnectionInput): Promise<ConnectionValidation> {
@@ -76,11 +78,14 @@ export class OpenAiProviderAdapter implements LlmProviderAdapter {
   }
 
   async estimateUsage(input: GenerationInput): Promise<UsageEstimate> {
-    return estimateUsage(assertGenerationInput(this.provider, input));
+    return estimateUsage(
+      assertGenerationInput(this.provider, input, this.dependencies.capabilities),
+      this.dependencies.capabilities,
+    );
   }
 
   async generatePrompt(input: GenerationInput): Promise<NormalizedGeneration> {
-    const parsedInput = assertGenerationInput(this.provider, input);
+    const parsedInput = assertGenerationInput(this.provider, input, this.dependencies.capabilities);
     const prompt = composePromptLayers(parsedInput);
     const { data, providerRequestId: headerRequestId } = await fetchJson(
       this.dependencies,
