@@ -48,7 +48,7 @@ export class LlmJobProcessor {
     const job = await this.dependencies.store.claim(jobId);
     if (!job) return;
     let context: AuthorizedLlmContext | null = null;
-    let providerStartAttempted = false;
+    let providerStarted = false;
 
     try {
       context = await this.dependencies.store.loadAuthorizedContext(job);
@@ -138,8 +138,14 @@ export class LlmJobProcessor {
         signal: abortController.signal,
       });
 
-      providerStartAttempted = true;
-      if (!(await this.dependencies.store.markProviderStarted(job))) return;
+      let markedStarted: boolean;
+      try {
+        markedStarted = await this.dependencies.store.markProviderStarted(job);
+      } catch {
+        throw new LlmRecoveryPendingFailure();
+      }
+      if (!markedStarted) throw new LlmRecoveryPendingFailure();
+      providerStarted = true;
       const startedAt = this.now();
       const result = await this.invokeWithCancellation(job, abortController, () =>
         job.operation === 'PREVIEW'
@@ -198,12 +204,13 @@ export class LlmJobProcessor {
         return;
       }
     } catch (cause) {
+      if (cause instanceof LlmRecoveryPendingFailure) throw cause;
       if (cause instanceof LeaseUnknownFailure) {
         await this.dependencies.store.markAmbiguous(job, 'LEASE_STATE_UNKNOWN').catch(() => false);
         return;
       }
       const failure = sanitizedFailure(cause);
-      if (providerStartAttempted) {
+      if (providerStarted) {
         await this.dependencies.store
           .markAmbiguous(job, 'PROVIDER_OUTCOME_UNKNOWN')
           .catch(() => false);
@@ -264,6 +271,13 @@ export class LlmJobProcessor {
   private async cancel(context: AuthorizedLlmContext, reason: string): Promise<void> {
     void reason;
     await this.dependencies.store.cancel(context.job);
+  }
+}
+
+class LlmRecoveryPendingFailure extends Error {
+  constructor() {
+    super('LLM_RECOVERY_PENDING');
+    this.name = 'LlmRecoveryPendingFailure';
   }
 }
 

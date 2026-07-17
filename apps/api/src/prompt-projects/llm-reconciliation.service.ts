@@ -20,6 +20,11 @@ export class LlmReconciliationService {
         const admin = await transaction.user.findUnique({ where: { auth0Sub: actor.sub } });
         if (!admin)
           throw new NotFoundException({ code: 'NOT_FOUND', message: 'resource not found' });
+        const locked = await transaction.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "PromptGenerationJob" WHERE "id" = ${jobId} FOR UPDATE
+        `;
+        if (!locked[0])
+          throw new NotFoundException({ code: 'NOT_FOUND', message: 'resource not found' });
         const operation = `llm-reconcile:${jobId}`;
         const keyHash = hash(key);
         const requestHash = hash(JSON.stringify(command));
@@ -42,29 +47,52 @@ export class LlmReconciliationService {
         });
         if (!job) throw new NotFoundException({ code: 'NOT_FOUND', message: 'resource not found' });
         const reservation = job.creditLedgerEntries[0];
-        if (command.command === 'KNOWN_SNAPSHOT') {
-          if (
-            job.status !== 'AMBIGUOUS' ||
+        if (
+          command.command === 'KNOWN_SNAPSHOT' &&
+          (job.status !== 'AMBIGUOUS' ||
             job.providerStage !== 'COMPLETED' ||
-            !job.providerSnapshot
-          )
-            throw invalidState();
-          await transaction.promptGenerationJob.update({
-            where: { id: job.id },
+            !isNormalizedSnapshot(job.providerSnapshot))
+        )
+          throw invalidState();
+        if (command.command !== 'KNOWN_SNAPSHOT' && (job.status !== 'AMBIGUOUS' || !reservation))
+          throw invalidState();
+        const mutation = await transaction.mutationIdempotency.create({
+          data: {
+            ownerId: admin.id,
+            operation,
+            keyHash,
+            requestHash,
+            status: 'COMPLETE',
+            entityId: job.id,
+            publicResult: { jobId, status: 'accepted' },
+            completedAt: new Date(),
+          },
+        });
+        if (command.command === 'KNOWN_SNAPSHOT') {
+          const updated = await transaction.promptGenerationJob.updateMany({
+            where: {
+              id: job.id,
+              status: 'AMBIGUOUS',
+              providerStage: 'COMPLETED',
+              reconciliationCommandId: null,
+            },
             data: {
               status: 'RUNNING',
               leaseToken: randomUUID(),
               heartbeatAt: new Date(),
               finishedAt: null,
               reconciliationReason: command.reason,
+              reconciliationActorId: admin.id,
+              reconciliationCommandId: mutation.id,
             },
           });
+          if (updated.count !== 1) throw invalidState();
         } else {
-          if (job.status !== 'AMBIGUOUS' || !reservation) throw invalidState();
-          const reserved = -reservation.amountMinor;
+          const scopedReservation = reservation!;
+          const reserved = -scopedReservation.amountMinor;
           const actual =
             command.command === 'CONFIRM_ACTUAL_COST' ? BigInt(command.actualCostMinor!) : 0n;
-          const maximum = reservationMaximum(reservation.metadata);
+          const maximum = reservationMaximum(scopedReservation.metadata);
           if (actual > maximum)
             throw new BadRequestException({
               code: 'CREDIT_COST_LIMIT_EXCEEDED',
@@ -80,13 +108,13 @@ export class LlmReconciliationService {
           if (kind === 'ADJUSTMENT' && delta === 0n) throw invalidState();
           await transaction.creditLedgerEntry.create({
             data: {
-              ownerId: reservation.ownerId,
+              ownerId: scopedReservation.ownerId,
               jobId: job.id,
               kind,
               amountMinor: delta,
-              currency: reservation.currency,
-              idempotencyKey: `admin-reconcile:${reservation.id}`,
-              reservationId: reservation.id,
+              currency: scopedReservation.currency,
+              idempotencyKey: `admin-reconcile:${scopedReservation.id}`,
+              reservationId: scopedReservation.id,
               metadata: {
                 actualAmountMinor: actual.toString(),
                 reason: command.reason,
@@ -94,21 +122,27 @@ export class LlmReconciliationService {
               },
             },
           });
-          await transaction.promptGenerationJob.update({
-            where: { id: job.id },
+          const updated = await transaction.promptGenerationJob.updateMany({
+            where: { id: job.id, status: 'AMBIGUOUS', reconciliationCommandId: null },
             data: {
               status: 'FAILED',
               errorCode: kind === 'REVERSAL' ? 'RECONCILED_NOT_CHARGED' : 'RECONCILED_ACTUAL_COST',
               errorMessage: 'Generation could not be completed.',
               reconciliationReason: command.reason,
               reconciledAt: new Date(),
+              reconciliationActorId: admin.id,
+              reconciliationCommandId: mutation.id,
             },
           });
+          if (updated.count !== 1) throw invalidState();
         }
         await transaction.auditEvent.create({
           data: {
             actorId: admin.id,
-            action: 'llm_job.reconciled',
+            action:
+              command.command === 'KNOWN_SNAPSHOT'
+                ? 'llm_job.reconciliation_accepted'
+                : 'llm_job.reconciliation_completed',
             entityType: 'PromptGenerationJob',
             entityId: job.id,
             metadata: {
@@ -116,19 +150,9 @@ export class LlmReconciliationService {
               reason: command.reason,
               evidenceHash: hash(command.evidence),
               ownerIdHash: hash(job.ownerId),
+              outcome: command.command === 'KNOWN_SNAPSHOT' ? 'PENDING' : 'FAILED',
+              commandIdHash: hash(mutation.id),
             },
-          },
-        });
-        await transaction.mutationIdempotency.create({
-          data: {
-            ownerId: admin.id,
-            operation,
-            keyHash,
-            requestHash,
-            status: 'COMPLETE',
-            entityId: job.id,
-            publicResult: { jobId, status: 'accepted' },
-            completedAt: new Date(),
           },
         });
         return { jobId, status: 'accepted' as const, replayed: false };
@@ -176,4 +200,13 @@ function reservationMaximum(metadata: Prisma.JsonValue | null): bigint {
   const raw = (metadata as Record<string, Prisma.JsonValue>).maximumAcceptedAmountMinor;
   if (typeof raw !== 'string') throw invalidState();
   return BigInt(raw);
+}
+
+function isNormalizedSnapshot(value: Prisma.JsonValue | null): boolean {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    (value as Record<string, Prisma.JsonValue>).schemaVersion === 1
+  );
 }

@@ -2,6 +2,7 @@ import { Queue } from 'bullmq';
 import IORedis from 'ioredis';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LlmQueueWorkerService } from './llm-queue-worker.service';
+import { LlmRecoveryQueueService } from './llm-recovery-queue.service';
 import { LLM_QUEUE_NAME } from './llm-worker.types';
 
 const redisUrl = process.env.TEST_REDIS_URL;
@@ -39,6 +40,26 @@ describeRedis('LLM BullMQ worker Redis integration', () => {
     await waitFor(() => process.mock.calls.length === 1);
     expect(process).toHaveBeenCalledOnce();
     expect(process).toHaveBeenCalledWith('worker-integration-job', 1, 3);
+  });
+
+  it('creates exactly one durable delivery from two recovery instances', async () => {
+    const connection = new IORedis(redisUrl!, { maxRetriesPerRequest: null });
+    const queue = new Queue(LLM_QUEUE_NAME, { connection });
+    resources.push(queue, { close: () => connection.quit() });
+    await queue.obliterate({ force: true }).catch(() => undefined);
+    const left = new LlmRecoveryQueueService(redisUrl!);
+    const right = new LlmRecoveryQueueService(redisUrl!);
+    resources.push(
+      { close: () => left.onModuleDestroy() },
+      { close: () => right.onModuleDestroy() },
+    );
+
+    await Promise.all([left.enqueue('recovered-job'), right.enqueue('recovered-job')]);
+
+    expect(await queue.getJobCounts('waiting', 'delayed', 'active')).toMatchObject({ waiting: 1 });
+    await expect(queue.getJob('recovered-job')).resolves.toMatchObject({
+      data: { jobId: 'recovered-job' },
+    });
   });
 });
 

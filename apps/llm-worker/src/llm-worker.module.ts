@@ -23,6 +23,7 @@ import { LlmJobRepository } from './llm-job.repository.js';
 import { LlmQueueWorkerService } from './llm-queue-worker.service.js';
 import { GeminiOAuthRefreshService } from './gemini-oauth-refresh.service.js';
 import { LlmReconciliationSweeperService } from './llm-reconciliation-sweeper.service.js';
+import { LlmRecoveryQueueService } from './llm-recovery-queue.service.js';
 
 const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
 
@@ -129,9 +130,14 @@ const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
       inject: [LlmJobProcessor],
     },
     {
+      provide: LlmRecoveryQueueService,
+      useFactory: () => new LlmRecoveryQueueService(loadRuntimeEnv(process.env).REDIS_URL),
+    },
+    {
       provide: LlmReconciliationSweeperService,
-      useFactory: (repository: LlmJobRepository) => new LlmReconciliationSweeperService(repository),
-      inject: [LlmJobRepository],
+      useFactory: (repository: LlmJobRepository, queue: LlmRecoveryQueueService) =>
+        new LlmReconciliationSweeperService(repository, queue),
+      inject: [LlmJobRepository, LlmRecoveryQueueService],
     },
   ],
 })

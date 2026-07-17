@@ -21,6 +21,7 @@ import type {
 } from './llm-worker.types';
 
 const STALE_RUNNING_MS = 5 * 60 * 1_000;
+const RECOVERY_LEASE_MS = 30_000;
 const MAX_ERROR_CODE = 64;
 const SnapshotSchema = z
   .object({
@@ -62,15 +63,9 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
 
   async claim(jobId: string): Promise<ClaimedLlmJob | null> {
     const now = new Date();
-    const staleBefore = new Date(now.getTime() - STALE_RUNNING_MS);
-    await this.recoverCompletedSnapshot(
-      jobId,
-      new Date(now.getTime() + 1_000),
-      'automatic stale completed snapshot recovery',
-    );
-    await this.reconcileUnclaimableStaleJob(jobId, staleBefore, now);
+    await this.recoverCompletedDelivery(jobId, now);
     const pending = await this.prisma.promptGenerationJob.findFirst({
-      where: { id: jobId, status: 'RUNNING', providerStage: 'STARTED' },
+      where: { id: jobId, status: 'RUNNING' },
       select: { id: true },
     });
     if (pending) throw new Error('LLM_RECOVERY_PENDING');
@@ -103,11 +98,9 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
           "updatedAt" = ${now}
       WHERE "id" = ${jobId}
         AND "attempts" < "maxAttempts"
+        AND "recoveryLeaseToken" IS NULL
         AND "providerStage" = 'NOT_STARTED'::"ProviderExecutionStage"
-        AND (
-          "status" = 'QUEUED'::"PromptJobStatus"
-          OR ("status" = 'RUNNING'::"PromptJobStatus" AND COALESCE("heartbeatAt", "startedAt") < ${staleBefore})
-        )
+        AND "status" = 'QUEUED'::"PromptJobStatus"
       RETURNING "id", "ownerId", "projectId", "operation", "provider", "model",
                 "credentialMode", "connectionId", "sourcePromptVersionId", "attempts", "maxAttempts", "leaseToken"::text
     `;
@@ -199,7 +192,11 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
     return updated.count === 1;
   }
 
-  async complete(command: CompletionCommand): Promise<boolean> {
+  async complete(
+    command: CompletionCommand,
+    recoveryToken?: string,
+    reconciliationReason?: string,
+  ): Promise<boolean> {
     return this.prisma.$transaction(async (transaction) => {
       const current = await transaction.promptGenerationJob.findFirst({
         where: {
@@ -211,6 +208,7 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
           attempts: command.job.attempts,
           providerCompletedAt: { not: null },
           providerStage: 'COMPLETED',
+          ...(recoveryToken ? { recoveryLeaseToken: recoveryToken } : {}),
         },
         include: {
           creditLedgerEntries: { where: { kind: 'RESERVATION', settlement: null }, take: 1 },
@@ -324,7 +322,10 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
         });
       }
       const updated = await transaction.promptGenerationJob.updateMany({
-        where: leaseWhere(command.job, ['RUNNING']),
+        where: {
+          ...leaseWhere(command.job, ['RUNNING']),
+          ...(recoveryToken ? { recoveryLeaseToken: recoveryToken } : {}),
+        },
         data: {
           status: 'SUCCEEDED',
           resultPromptVersionId,
@@ -332,9 +333,28 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
           retryable: false,
           leaseToken: null,
           heartbeatAt: null,
+          recoveryLeaseToken: null,
+          recoveryLeaseExpiresAt: null,
+          ...(reconciliationReason
+            ? { reconciliationReason, reconciledAt: new Date() }
+            : {}),
         },
       });
       if (updated.count !== 1) throw new Error('WORKER_STATE_CHANGED');
+      if (current.reconciliationActorId && current.reconciliationCommandId) {
+        await transaction.auditEvent.create({
+          data: {
+            actorId: current.reconciliationActorId,
+            action: 'llm_job.reconciliation_completed',
+            entityType: 'PromptGenerationJob',
+            entityId: current.id,
+            metadata: {
+              outcome: 'SUCCEEDED',
+              commandIdHash: hash(current.reconciliationCommandId),
+            },
+          },
+        });
+      }
       return true;
     });
   }
@@ -465,58 +485,124 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
     });
   }
 
-  private async reconcileUnclaimableStaleJob(
-    jobId: string,
-    staleBefore: Date,
-    now: Date,
-  ): Promise<void> {
-    await this.prisma.$transaction(async (transaction) => {
-      const rows = await transaction.$queryRaw<Array<{ id: string }>>`
-        UPDATE "PromptGenerationJob"
-        SET "status" = CASE WHEN "providerStage" = 'STARTED'::"ProviderExecutionStage"
-              THEN 'AMBIGUOUS'::"PromptJobStatus" ELSE 'FAILED'::"PromptJobStatus" END,
-            "errorCode" = CASE WHEN "providerStage" = 'STARTED'::"ProviderExecutionStage"
-              THEN 'PROVIDER_OUTCOME_UNKNOWN' ELSE 'DEAD_LETTER_WORKER_LEASE_EXPIRED' END,
-            "errorMessage" = CASE WHEN "providerStage" = 'STARTED'::"ProviderExecutionStage"
-              THEN NULL ELSE 'Generation could not be completed.' END,
-            "retryable" = false,
-            "finishedAt" = ${now},
-            "leaseToken" = NULL,
-            "heartbeatAt" = NULL,
-            "updatedAt" = ${now},
-            "reconciliationReason" = CASE WHEN "providerStage" = 'STARTED'::"ProviderExecutionStage"
-              THEN 'stale STARTED provider execution requires explicit reconciliation'
-              ELSE 'stale NOT_STARTED worker exhausted attempts' END
-        WHERE "id" = ${jobId}
-          AND "status" = 'RUNNING'::"PromptJobStatus"
-          AND COALESCE("heartbeatAt", "startedAt") < ${staleBefore}
-          AND ("providerStage" = 'STARTED'::"ProviderExecutionStage"
-               OR ("providerStage" = 'NOT_STARTED'::"ProviderExecutionStage" AND "attempts" >= "maxAttempts"))
-        RETURNING "id", "providerStage"::text AS "providerStage"
-      `;
-      if (!rows[0]) return;
-      if ((rows[0] as { providerStage?: string }).providerStage === 'STARTED') return;
-      const reservation = await transaction.creditLedgerEntry.findFirst({
-        where: { jobId, kind: 'RESERVATION', settlement: null },
-      });
-      if (!reservation) return;
-      const estimated = -reservation.amountMinor;
-      await transaction.creditLedgerEntry.create({
-        data: {
-          ownerId: reservation.ownerId,
-          jobId: reservation.jobId,
-          kind: 'REVERSAL',
-          amountMinor: estimated,
-          currency: reservation.currency,
-          idempotencyKey: `reverse:${reservation.id}`,
-          reservationId: reservation.id,
-          metadata: {
-            estimatedAmountMinor: estimated.toString(),
-            maximumAcceptedAmountMinor: reservationMaximum(reservation.metadata).toString(),
-            reason: 'unclaimable stale worker lease reconciled',
-          },
+  private async finalizeStartedRecovery(jobId: string, recoveryToken: string): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.promptGenerationJob.findFirst({
+        where: {
+          id: jobId,
+          status: 'RUNNING',
+          providerStage: 'STARTED',
+          recoveryLeaseToken: recoveryToken,
         },
       });
+      if (!current) return false;
+      const updated = await transaction.promptGenerationJob.updateMany({
+        where: {
+          id: jobId,
+          status: 'RUNNING',
+          providerStage: 'STARTED',
+          recoveryLeaseToken: recoveryToken,
+        },
+        data: {
+          status: 'AMBIGUOUS',
+          errorCode: 'PROVIDER_OUTCOME_UNKNOWN',
+          errorMessage: null,
+          retryable: false,
+          finishedAt: new Date(),
+          leaseToken: null,
+          heartbeatAt: null,
+          recoveryLeaseToken: null,
+          recoveryLeaseExpiresAt: null,
+          reconciliationReason: 'stale STARTED provider execution requires explicit reconciliation',
+        },
+      });
+      if (updated.count !== 1) return false;
+      await this.createFinalRecoveryAudit(transaction, current, 'AMBIGUOUS');
+      return true;
+    });
+  }
+
+  private async requeueNotStartedRecovery(
+    jobId: string,
+    recoveryToken: string,
+  ): Promise<boolean> {
+    const updated = await this.prisma.promptGenerationJob.updateMany({
+      where: {
+        id: jobId,
+        status: 'RUNNING',
+        providerStage: 'NOT_STARTED',
+        recoveryLeaseToken: recoveryToken,
+      },
+      data: {
+        status: 'QUEUED',
+        errorCode: 'RECOVERY_ENQUEUE_PENDING',
+        errorMessage: 'Generation will be retried.',
+        retryable: true,
+        startedAt: null,
+        heartbeatAt: null,
+        leaseToken: null,
+      },
+    });
+    return updated.count === 1;
+  }
+
+  private async failNotStartedRecovery(jobId: string, recoveryToken: string): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.promptGenerationJob.findFirst({
+        where: {
+          id: jobId,
+          status: 'RUNNING',
+          providerStage: 'NOT_STARTED',
+          recoveryLeaseToken: recoveryToken,
+        },
+        include: {
+          creditLedgerEntries: { where: { kind: 'RESERVATION', settlement: null }, take: 1 },
+        },
+      });
+      if (!current || current.attempts < current.maxAttempts) return false;
+      const updated = await transaction.promptGenerationJob.updateMany({
+        where: {
+          id: jobId,
+          status: 'RUNNING',
+          providerStage: 'NOT_STARTED',
+          recoveryLeaseToken: recoveryToken,
+        },
+        data: {
+          status: 'FAILED',
+          errorCode: 'DEAD_LETTER_WORKER_LEASE_EXPIRED',
+          errorMessage: 'Generation could not be completed.',
+          retryable: false,
+          finishedAt: new Date(),
+          leaseToken: null,
+          heartbeatAt: null,
+          recoveryLeaseToken: null,
+          recoveryLeaseExpiresAt: null,
+          reconciliationReason: 'stale NOT_STARTED worker exhausted attempts',
+        },
+      });
+      if (updated.count !== 1) return false;
+      const reservation = current.creditLedgerEntries[0];
+      if (reservation) {
+        const estimated = -reservation.amountMinor;
+        await transaction.creditLedgerEntry.create({
+          data: {
+            ownerId: reservation.ownerId,
+            jobId: reservation.jobId,
+            kind: 'REVERSAL',
+            amountMinor: estimated,
+            currency: reservation.currency,
+            idempotencyKey: `reverse:${reservation.id}`,
+            reservationId: reservation.id,
+            metadata: {
+              estimatedAmountMinor: estimated.toString(),
+              maximumAcceptedAmountMinor: reservationMaximum(reservation.metadata).toString(),
+              reason: 'unclaimable stale worker lease reconciled',
+            },
+          },
+        });
+      }
+      await this.createFinalRecoveryAudit(transaction, current, 'FAILED');
+      return true;
     });
   }
 
@@ -547,31 +633,73 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
     return this.reconcileWithSettlement(jobId, actualAmountMinor, reason);
   }
 
-  async sweepRecoverable(
-    batchSize = 50,
-  ): Promise<Readonly<{ completed: number; ambiguous: number }>> {
+  async sweepRecoverable(batchSize = 50): Promise<
+    Readonly<{
+      completed: number;
+      ambiguous: number;
+      requeued: number;
+      failed: number;
+      deliveries: ReadonlyArray<Readonly<{ jobId: string; recoveryToken: string }>>;
+    }>
+  > {
     if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100)
       throw new Error('SWEEP_BATCH_INVALID');
+    const now = new Date();
     const staleBefore = new Date(Date.now() - STALE_RUNNING_MS);
+    const recoveryToken = randomUUID();
+    const recoveryLeaseExpiresAt = new Date(now.getTime() + RECOVERY_LEASE_MS);
     const rows = await this.prisma.$transaction(
       (transaction) =>
-        transaction.$queryRaw<Array<{ id: string; providerStage: 'STARTED' | 'COMPLETED' }>>`
-        SELECT "id", "providerStage"::text AS "providerStage"
-        FROM "PromptGenerationJob"
-        WHERE "status" = 'RUNNING'::"PromptJobStatus"
-          AND (
-            "providerStage" = 'COMPLETED'::"ProviderExecutionStage"
-            OR ("providerStage" = 'STARTED'::"ProviderExecutionStage"
-                AND COALESCE("heartbeatAt", "startedAt") < ${staleBefore})
-          )
-          AND pg_try_advisory_xact_lock(hashtextextended("id", 17))
-        ORDER BY "updatedAt" ASC
-        LIMIT ${batchSize}
-        FOR UPDATE SKIP LOCKED
+        transaction.$queryRaw<
+          Array<{
+            id: string;
+            status: 'RUNNING' | 'QUEUED';
+            providerStage: 'NOT_STARTED' | 'STARTED' | 'COMPLETED';
+            attempts: number;
+            maxAttempts: number;
+          }>
+        >`
+        WITH candidates AS (
+          SELECT "id"
+          FROM "PromptGenerationJob"
+          WHERE ("recoveryLeaseExpiresAt" IS NULL OR "recoveryLeaseExpiresAt" < ${now})
+            AND (
+              (
+                "status" = 'RUNNING'::"PromptJobStatus"
+                AND (
+                  "providerStage" = 'COMPLETED'::"ProviderExecutionStage"
+                  OR (
+                    "providerStage" IN ('STARTED', 'NOT_STARTED')
+                    AND COALESCE("heartbeatAt", "startedAt") < ${staleBefore}
+                  )
+                )
+              )
+              OR (
+                "status" = 'QUEUED'::"PromptJobStatus"
+                AND "providerStage" = 'NOT_STARTED'::"ProviderExecutionStage"
+                AND "errorCode" = 'RECOVERY_ENQUEUE_PENDING'
+              )
+            )
+          ORDER BY "updatedAt" ASC
+          LIMIT ${batchSize}
+          FOR UPDATE SKIP LOCKED
+        )
+        UPDATE "PromptGenerationJob" AS job
+        SET "recoveryLeaseToken" = ${recoveryToken}::uuid,
+            "recoveryLeaseExpiresAt" = ${recoveryLeaseExpiresAt},
+            "updatedAt" = ${now}
+        FROM candidates
+        WHERE job."id" = candidates."id"
+        RETURNING job."id", job."status"::text AS "status",
+                  job."providerStage"::text AS "providerStage",
+                  job."attempts", job."maxAttempts"
       `,
     );
     let completed = 0;
     let ambiguous = 0;
+    let requeued = 0;
+    let failed = 0;
+    const deliveries: Array<Readonly<{ jobId: string; recoveryToken: string }>> = [];
     for (const row of rows) {
       if (row.providerStage === 'COMPLETED') {
         if (
@@ -579,21 +707,74 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
             row.id,
             new Date(Date.now() + 1_000),
             'periodic completed snapshot recovery',
+            recoveryToken,
           )
         )
           completed += 1;
-      } else {
-        await this.reconcileUnclaimableStaleJob(row.id, staleBefore, new Date());
-        ambiguous += 1;
+      } else if (row.providerStage === 'STARTED') {
+        if (await this.finalizeStartedRecovery(row.id, recoveryToken)) ambiguous += 1;
+      } else if (row.status === 'QUEUED') {
+        deliveries.push(Object.freeze({ jobId: row.id, recoveryToken }));
+      } else if (row.attempts < row.maxAttempts) {
+        if (await this.requeueNotStartedRecovery(row.id, recoveryToken)) {
+          requeued += 1;
+          deliveries.push(Object.freeze({ jobId: row.id, recoveryToken }));
+        }
+      } else if (await this.failNotStartedRecovery(row.id, recoveryToken)) {
+        failed += 1;
       }
     }
-    return Object.freeze({ completed, ambiguous });
+    return Object.freeze({
+      completed,
+      ambiguous,
+      requeued,
+      failed,
+      deliveries: Object.freeze(deliveries),
+    });
+  }
+
+  async acknowledgeRecoveryEnqueued(jobId: string, recoveryToken: string): Promise<boolean> {
+    const updated = await this.prisma.promptGenerationJob.updateMany({
+      where: {
+        id: jobId,
+        status: 'QUEUED',
+        providerStage: 'NOT_STARTED',
+        errorCode: 'RECOVERY_ENQUEUE_PENDING',
+        recoveryLeaseToken: recoveryToken,
+      },
+      data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null },
+    });
+    return updated.count === 1;
+  }
+
+  private async recoverCompletedDelivery(jobId: string, now: Date): Promise<boolean> {
+    const recoveryToken = randomUUID();
+    const leased = await this.prisma.promptGenerationJob.updateMany({
+      where: {
+        id: jobId,
+        status: 'RUNNING',
+        providerStage: 'COMPLETED',
+        OR: [{ recoveryLeaseExpiresAt: null }, { recoveryLeaseExpiresAt: { lt: now } }],
+      },
+      data: {
+        recoveryLeaseToken: recoveryToken,
+        recoveryLeaseExpiresAt: new Date(now.getTime() + RECOVERY_LEASE_MS),
+      },
+    });
+    if (leased.count !== 1) return false;
+    return this.recoverCompletedSnapshot(
+      jobId,
+      new Date(now.getTime() + 1_000),
+      'automatic completed snapshot delivery recovery',
+      recoveryToken,
+    );
   }
 
   private async recoverCompletedSnapshot(
     jobId: string,
     staleBefore: Date,
     reason: string,
+    recoveryToken?: string,
   ): Promise<boolean> {
     const row = await this.prisma.promptGenerationJob.findFirst({
       where: {
@@ -601,6 +782,7 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
         status: 'RUNNING',
         providerStage: 'COMPLETED',
         leaseToken: { not: null },
+        ...(recoveryToken ? { recoveryLeaseToken: recoveryToken } : {}),
         OR: [
           { heartbeatAt: { lt: staleBefore } },
           { heartbeatAt: null, startedAt: { lt: staleBefore } },
@@ -613,20 +795,76 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
     try {
       command = commandFromSnapshot(claimed, row.providerSnapshot);
     } catch {
-      await this.markAmbiguous(claimed, 'PROVIDER_SNAPSHOT_INVALID');
+      await this.finalizeInvalidSnapshotRecovery(claimed, recoveryToken);
       return false;
     }
-    const completed = await this.complete(command).catch((error: unknown) => {
+    return this.complete(command, recoveryToken, reason).catch((error: unknown) => {
       if (isConcurrentCompletionRace(error)) return false;
       throw error;
     });
-    if (completed) {
-      await this.prisma.promptGenerationJob.updateMany({
-        where: { id: jobId, status: 'SUCCEEDED' },
-        data: { reconciliationReason: reason, reconciledAt: new Date() },
+  }
+
+  private async finalizeInvalidSnapshotRecovery(
+    job: ClaimedLlmJob,
+    recoveryToken?: string,
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (transaction) => {
+      const current = await transaction.promptGenerationJob.findFirst({
+        where: {
+          ...leaseWhere(job, ['RUNNING']),
+          providerStage: 'COMPLETED',
+          ...(recoveryToken ? { recoveryLeaseToken: recoveryToken } : {}),
+        },
       });
-    }
-    return completed;
+      if (!current) return false;
+      const updated = await transaction.promptGenerationJob.updateMany({
+        where: {
+          ...leaseWhere(job, ['RUNNING']),
+          providerStage: 'COMPLETED',
+          ...(recoveryToken ? { recoveryLeaseToken: recoveryToken } : {}),
+        },
+        data: {
+          status: 'AMBIGUOUS',
+          errorCode: 'PROVIDER_SNAPSHOT_INVALID',
+          errorMessage: null,
+          retryable: false,
+          finishedAt: new Date(),
+          leaseToken: null,
+          heartbeatAt: null,
+          recoveryLeaseToken: null,
+          recoveryLeaseExpiresAt: null,
+          reconciliationReason: 'normalized provider snapshot is invalid',
+          reconciledAt: current.reconciliationActorId ? new Date() : null,
+        },
+      });
+      if (updated.count !== 1) return false;
+      await this.createFinalRecoveryAudit(transaction, current, 'FAILED');
+      return true;
+    });
+  }
+
+  private async createFinalRecoveryAudit(
+    transaction: Prisma.TransactionClient,
+    current: Readonly<{
+      id: string;
+      reconciliationActorId: string | null;
+      reconciliationCommandId: string | null;
+    }>,
+    outcome: 'SUCCEEDED' | 'FAILED' | 'AMBIGUOUS',
+  ): Promise<void> {
+    if (!current.reconciliationActorId || !current.reconciliationCommandId) return;
+    await transaction.auditEvent.create({
+      data: {
+        actorId: current.reconciliationActorId,
+        action: 'llm_job.reconciliation_completed',
+        entityType: 'PromptGenerationJob',
+        entityId: current.id,
+        metadata: {
+          outcome,
+          commandIdHash: hash(current.reconciliationCommandId),
+        },
+      },
+    });
   }
 
   private async reconcileWithSettlement(

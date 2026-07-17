@@ -160,11 +160,20 @@ describe('LlmJobProcessor', () => {
     expect(store.markProviderStarted).not.toHaveBeenCalled();
   });
 
-  it('never retries when persistence of provider STARTED has an unknown outcome', async () => {
-    const { processor, store, claimed } = setup();
+  it('never acknowledges transport when persistence of provider STARTED is unknown', async () => {
+    const { processor, store, provider } = setup();
     store.markProviderStarted.mockRejectedValue(new Error('connection lost after commit'));
-    await expect(processor.process('job-1', 1, 10)).resolves.toBeUndefined();
-    expect(store.markAmbiguous).toHaveBeenCalledWith(claimed, 'PROVIDER_OUTCOME_UNKNOWN');
+    await expect(processor.process('job-1', 1, 10)).rejects.toThrow('LLM_RECOVERY_PENDING');
+    expect(provider.generatePrompt).not.toHaveBeenCalled();
+    expect(store.markAmbiguous).not.toHaveBeenCalled();
+    expect(store.markRetry).not.toHaveBeenCalled();
+  });
+
+  it('never acknowledges transport when provider STARTED loses its fence', async () => {
+    const { processor, store, provider } = setup();
+    store.markProviderStarted.mockResolvedValue(false);
+    await expect(processor.process('job-1', 1, 10)).rejects.toThrow('LLM_RECOVERY_PENDING');
+    expect(provider.generatePrompt).not.toHaveBeenCalled();
     expect(store.markRetry).not.toHaveBeenCalled();
   });
 

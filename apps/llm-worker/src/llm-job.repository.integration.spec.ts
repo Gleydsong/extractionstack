@@ -4,6 +4,7 @@ import type { CrawledPage, PromptWizardInput } from '@extractionstack/shared';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildInvestigationReport } from '../../api/src/extract/investigation-report.builder';
 import { LlmJobRepository } from './llm-job.repository';
+import { LlmReconciliationService } from '../../api/src/prompt-projects/llm-reconciliation.service';
 import type { ClaimedLlmJob, CompletionCommand } from './llm-worker.types';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -18,12 +19,16 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
 
   it('claims one duplicate delivery and persists terminal artifacts plus settlement atomically', async () => {
     const fixture = await createFixture(prisma, true);
-    const [left, right] = await Promise.all([
+    const outcomes = await Promise.allSettled([
       repository.claim(fixture.jobId),
       repository.claim(fixture.jobId),
     ]);
-    const claimed = left ?? right;
-    expect([left, right].filter(Boolean)).toHaveLength(1);
+    const claimed = outcomes.find(
+      (outcome): outcome is PromiseFulfilledResult<ClaimedLlmJob | null> =>
+        outcome.status === 'fulfilled',
+    )?.value;
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
     expect(claimed).not.toBeNull();
     const context = await repository.loadAuthorizedContext(claimed!);
     expect(context.job.ownerId).toBe(fixture.ownerId);
@@ -46,14 +51,84 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     ).toBe(1);
   });
 
-  it('recovers a stale RUNNING lease but never claims a fresh RUNNING job', async () => {
+  it('recovers a stale RUNNING lease only after durable sweep enqueue acknowledgement', async () => {
     const stale = await createFixture(prisma, false);
+    const first = await repository.claim(stale.jobId);
+    await expect(repository.claim(stale.jobId)).rejects.toThrow('LLM_RECOVERY_PENDING');
     await prisma.promptGenerationJob.update({
       where: { id: stale.jobId },
-      data: { status: 'RUNNING', startedAt: new Date(Date.now() - 10 * 60_000) },
+      data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
     });
-    await expect(repository.claim(stale.jobId)).resolves.toMatchObject({ id: stale.jobId });
-    await expect(repository.claim(stale.jobId)).resolves.toBeNull();
+    const swept = await repository.sweepRecoverable();
+    expect(swept).toMatchObject({ requeued: 1 });
+    const delivery = swept.deliveries.find((candidate) => candidate.jobId === stale.jobId)!;
+    await expect(
+      repository.acknowledgeRecoveryEnqueued(delivery.jobId, delivery.recoveryToken),
+    ).resolves.toBe(true);
+    await expect(repository.claim(stale.jobId)).resolves.toMatchObject({
+      id: stale.jobId,
+      attempts: first!.attempts + 1,
+    });
+  });
+
+  it('does not acknowledge a fresh RUNNING NOT_STARTED redelivery', async () => {
+    const fixture = await createFixture(prisma, false);
+    await expect(repository.claim(fixture.jobId)).resolves.not.toBeNull();
+    await expect(repository.claim(fixture.jobId)).rejects.toThrow('LLM_RECOVERY_PENDING');
+  });
+
+  it('leases and requeues one stale NOT_STARTED recovery for durable enqueue', async () => {
+    const fixture = await createFixture(prisma, false);
+    await repository.claim(fixture.jobId);
+    await prisma.promptGenerationJob.update({
+      where: { id: fixture.jobId },
+      data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
+    });
+
+    const result = await repository.sweepRecoverable();
+    expect(result).toMatchObject({ requeued: 1, failed: 0 });
+    expect(result.deliveries.some((delivery) => delivery.jobId === fixture.jobId)).toBe(true);
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({ status: 'QUEUED', providerStage: 'NOT_STARTED' });
+  });
+
+  it('lets only one of two sweepers transition the same stale NOT_STARTED job', async () => {
+    const fixture = await createFixture(prisma, false);
+    await repository.claim(fixture.jobId);
+    await prisma.promptGenerationJob.update({
+      where: { id: fixture.jobId },
+      data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    const otherRepository = new LlmJobRepository(prisma);
+
+    const [left, right] = await Promise.all([
+      repository.sweepRecoverable(),
+      otherRepository.sweepRecoverable(),
+    ]);
+    expect(left.requeued + right.requeued).toBe(1);
+    expect(left.deliveries.length + right.deliveries.length).toBe(1);
+    expect(left.failed + right.failed).toBe(0);
+  });
+
+  it('fails and reverses one stale final NOT_STARTED attempt', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await prisma.promptGenerationJob.update({
+      where: { id: fixture.jobId },
+      data: {
+        attempts: claimed!.maxAttempts,
+        heartbeatAt: new Date(Date.now() - 10 * 60_000),
+      },
+    });
+
+    const result = await repository.sweepRecoverable();
+    expect(result).toMatchObject({ failed: 1, requeued: 0 });
+    expect(
+      await prisma.creditLedgerEntry.count({
+        where: { jobId: fixture.jobId, kind: 'REVERSAL' },
+      }),
+    ).toBe(1);
   });
 
   it('discards completion after cancellation request', async () => {
@@ -106,6 +181,11 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
       where: { id: fixture.jobId },
       data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
     });
+    const swept = await repository.sweepRecoverable();
+    await repository.acknowledgeRecoveryEnqueued(
+      swept.deliveries[0]!.jobId,
+      swept.deliveries[0]!.recoveryToken,
+    );
     const currentClaim = await repository.claim(fixture.jobId);
     expect(currentClaim).not.toBeNull();
     expect(currentClaim!.leaseToken).not.toBe(staleClaim!.leaseToken);
@@ -142,7 +222,7 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
       },
     });
 
-    await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
+    await expect(repository.sweepRecoverable()).resolves.toMatchObject({ failed: 1 });
     await expect(
       prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
     ).resolves.toMatchObject({
@@ -167,7 +247,7 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
       data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
     });
 
-    await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
+    await expect(repository.sweepRecoverable()).resolves.toMatchObject({ completed: 1 });
     await expect(
       prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
     ).resolves.toMatchObject({ status: 'SUCCEEDED', providerStage: 'COMPLETED' });
@@ -186,7 +266,7 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
       where: { id: fixture.jobId },
       data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
     });
-    await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
+    await expect(repository.sweepRecoverable()).resolves.toMatchObject({ ambiguous: 1 });
     await expect(
       prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
     ).resolves.toMatchObject({ status: 'AMBIGUOUS', providerStage: 'STARTED' });
@@ -272,6 +352,50 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     expect(await prisma.llmUsage.count({ where: { jobId: fixture.jobId } })).toBe(1);
   });
 
+  it('accepts one concurrent admin snapshot command and audits its final outcome', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    const command = completion(claimed!, 'admin-known-request', 2n);
+    await repository.markProviderStarted(claimed!);
+    await repository.markProviderCompleted(command);
+    await repository.markAmbiguous(claimed!, 'PERSISTENCE_FAILED');
+    const adminSub = `auth0|admin-${randomUUID()}`;
+    const admin = await prisma.user.create({ data: { auth0Sub: adminSub, role: 'ADMIN' } });
+    const service = new LlmReconciliationService(prisma);
+    const body = {
+      command: 'KNOWN_SNAPSHOT' as const,
+      reason: 'operator verified normalized provider snapshot',
+      evidence: 'incident-ticket-verified-12345',
+    };
+
+    const outcomes = await Promise.allSettled([
+      service.reconcile({ sub: adminSub, roles: ['admin'] }, fixture.jobId, body, 'admin-key-a'),
+      service.reconcile({ sub: adminSub, roles: ['admin'] }, fixture.jobId, body, 'admin-key-b'),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    expect(
+      await prisma.mutationIdempotency.count({
+        where: { ownerId: admin.id, operation: `llm-reconcile:${fixture.jobId}` },
+      }),
+    ).toBe(1);
+    await expect(repository.sweepRecoverable()).resolves.toMatchObject({ completed: 1 });
+    expect(
+      await prisma.auditEvent.count({
+        where: {
+          actorId: admin.id,
+          entityId: fixture.jobId,
+          action: 'llm_job.reconciliation_completed',
+        },
+      }),
+    ).toBe(1);
+    const audits = await prisma.auditEvent.findMany({
+      where: { actorId: admin.id, entityId: fixture.jobId },
+      select: { metadata: true },
+    });
+    expect(JSON.stringify(audits)).not.toContain('Prompt natural persistido');
+  });
+
   it('uses zero-delta CONFIRMATION when actual cost equals the reservation', async () => {
     const fixture = await createFixture(prisma, true);
     const claimed = await repository.claim(fixture.jobId);
@@ -325,6 +449,24 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     await expect(
       prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
     ).resolves.toMatchObject({ status: 'SUCCEEDED' });
+  });
+
+  it('does not process a completed delivery owned by another recovery lease', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    const command = completion(claimed!, 'leased-completed-request', 2n);
+    await repository.markProviderStarted(claimed!);
+    await repository.markProviderCompleted(command);
+    await prisma.promptGenerationJob.update({
+      where: { id: fixture.jobId },
+      data: {
+        recoveryLeaseToken: randomUUID(),
+        recoveryLeaseExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+
+    await expect(repository.claim(fixture.jobId)).rejects.toThrow('LLM_RECOVERY_PENDING');
+    expect(await prisma.promptVersion.count({ where: { projectId: fixture.projectId } })).toBe(0);
   });
 
   it('does not acknowledge a fresh STARTED recovery as successful delivery', async () => {

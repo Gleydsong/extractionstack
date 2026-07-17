@@ -12,6 +12,7 @@ describe('LlmReconciliationService', () => {
   it('returns the same public 404 when the job does not exist', async () => {
     const transaction = {
       user: { findUnique: vi.fn().mockResolvedValue({ id: 'admin-1' }) },
+      $queryRaw: vi.fn().mockResolvedValue([]),
       mutationIdempotency: { findUnique: vi.fn().mockResolvedValue(null) },
       promptGenerationJob: { findUnique: vi.fn().mockResolvedValue(null) },
     };
@@ -29,6 +30,7 @@ describe('LlmReconciliationService', () => {
   it('replays a completed idempotent command without touching the job or ledger', async () => {
     const transaction = {
       user: { findUnique: vi.fn().mockResolvedValue({ id: 'admin-1' }) },
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'job-1' }]),
       mutationIdempotency: {
         findUnique: vi.fn().mockResolvedValue({
           requestHash: 'f2c6542d0315c3a25676050c66849fdf84ba581dbc4171730ac194aed7179dda',
@@ -51,9 +53,10 @@ describe('LlmReconciliationService', () => {
   it('records zero-delta confirmation, audit, and idempotency in one transaction', async () => {
     const transaction = {
       user: { findUnique: vi.fn().mockResolvedValue({ id: 'admin-1' }) },
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'job-1' }]),
       mutationIdempotency: {
         findUnique: vi.fn().mockResolvedValue(null),
-        create: vi.fn().mockResolvedValue({}),
+        create: vi.fn().mockResolvedValue({ id: 'mutation-1' }),
       },
       promptGenerationJob: {
         findUnique: vi.fn().mockResolvedValue({
@@ -72,7 +75,7 @@ describe('LlmReconciliationService', () => {
             },
           ],
         }),
-        update: vi.fn().mockResolvedValue({}),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       creditLedgerEntry: { create: vi.fn().mockResolvedValue({}) },
       auditEvent: { create: vi.fn().mockResolvedValue({}) },
