@@ -596,6 +596,26 @@ describe('OpenAiProviderAdapter', () => {
     });
   });
 
+  it('classifies an external cooperative abort as cancellation, not timeout', async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn(
+      (_url: URL | RequestInfo, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('secret cancellation detail', 'AbortError')),
+          );
+        }),
+    );
+    const adapter = new OpenAiProviderAdapter(dependencies(fetch));
+    const result = adapter.generatePrompt({ ...input, signal: controller.signal });
+    controller.abort();
+    await expect(result).rejects.toMatchObject({
+      code: 'REQUEST_CANCELLED',
+      retryable: false,
+      message: 'REQUEST_CANCELLED',
+    });
+  });
+
   it('keeps the timeout active while reading the response body', async () => {
     const hangingResponse = {
       ok: true,

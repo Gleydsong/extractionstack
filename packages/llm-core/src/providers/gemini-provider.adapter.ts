@@ -119,6 +119,7 @@ export class GeminiProviderAdapter implements LlmProviderAdapter {
       new URL(endpoint, this.dependencies.baseUrl),
       {
         method: 'POST',
+        signal: parsedInput.signal,
         headers,
         body: JSON.stringify({
           ...(prompt.system ? { systemInstruction: { parts: [{ text: prompt.system }] } } : {}),

@@ -204,6 +204,9 @@ export async function fetchJson(
   init: RequestInit,
 ): Promise<Readonly<{ data: unknown; providerRequestId: string | null }>> {
   const controller = new AbortController();
+  const externalSignal = init.signal;
+  const abortFromExternal = () => controller.abort();
+  externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
   const timer = setTimeout(() => controller.abort(), dependencies.timeoutMs);
   const aborted = new Promise<never>((_resolve, reject) => {
     controller.signal.addEventListener(
@@ -220,6 +223,10 @@ export async function fetchJson(
     ]);
   } catch (error) {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
+    if (externalSignal?.aborted) {
+      throw new ProviderFailure('REQUEST_CANCELLED');
+    }
     if (error instanceof ProviderFailure) throw error;
     if (controller.signal.aborted || isAbortError(error)) {
       throw new ProviderFailure('TIMEOUT', { retryable: true });
@@ -247,6 +254,7 @@ export async function fetchJson(
     }
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
   }
 }
 

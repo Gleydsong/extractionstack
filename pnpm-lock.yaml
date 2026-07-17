@@ -157,6 +157,52 @@ importers:
         specifier: ^1.4.0
         version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(terser@5.49.0)
 
+  apps/llm-worker:
+    dependencies:
+      '@extractionstack/llm-core':
+        specifier: workspace:*
+        version: link:../../packages/llm-core
+      '@extractionstack/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@nestjs/common':
+        specifier: ^10.3.0
+        version: 10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/core':
+        specifier: ^10.3.0
+        version: 10.4.22(@nestjs/common@10.4.22(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@10.4.22)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@prisma/client':
+        specifier: ^5.10.0
+        version: 5.22.0(prisma@5.22.0)
+      bullmq:
+        specifier: ^5.34.0
+        version: 5.80.4
+      ioredis:
+        specifier: ^5.4.1
+        version: 5.11.1
+      reflect-metadata:
+        specifier: ^0.2.1
+        version: 0.2.2
+      rxjs:
+        specifier: ^7.8.1
+        version: 7.8.2
+      zod:
+        specifier: ^3.22.4
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.11.0
+        version: 20.19.43
+      ts-node:
+        specifier: ^10.9.2
+        version: 10.9.2(@types/node@20.19.43)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+      vitest:
+        specifier: ^1.6.1
+        version: 1.6.1(@types/node@20.19.43)(jsdom@24.1.3)(terser@5.49.0)
+
   apps/web:
     dependencies:
       '@auth0/auth0-react':

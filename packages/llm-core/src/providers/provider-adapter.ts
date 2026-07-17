@@ -119,6 +119,7 @@ export const GenerationInputSchema = z
     sourcePrompt: PromptVersionSchema.nullable(),
     layers: z.array(PromptLayerSchema).min(1).max(6).readonly(),
     maxOutputTokens: z.number().int().positive().max(1_000_000),
+    signal: z.instanceof(AbortSignal).optional(),
   })
   .strict()
   .superRefine(validateProviderCredential)

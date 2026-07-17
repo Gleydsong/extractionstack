@@ -18,7 +18,7 @@ describe('BullMqPromptGenerationQueue', () => {
       {
         jobId: 'cm1234567890abcdef',
         attempts: 3,
-        backoff: { type: 'exponential', delay: 1_000 },
+        backoff: { type: 'llm-bounded-jitter' },
         removeOnComplete: { age: 3_600, count: 1_000 },
         removeOnFail: false,
       },

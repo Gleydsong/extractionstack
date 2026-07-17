@@ -92,6 +92,7 @@ export class OpenAiProviderAdapter implements LlmProviderAdapter {
       new URL('responses', this.dependencies.baseUrl),
       {
         method: 'POST',
+        signal: parsedInput.signal,
         headers: {
           authorization: `Bearer ${parsedInput.credential.value}`,
           'content-type': 'application/json',
