@@ -8,6 +8,7 @@ import {
   ProviderFailure,
   type CredentialResolver,
   type GenerationInput,
+  type NormalizedUsage,
   type PricingCatalog,
   type PromptLayer,
 } from '@extractionstack/llm-core';
@@ -59,9 +60,15 @@ export class LlmJobProcessor {
       const brief = this.dependencies.assembler.assemble(context.report);
       const inspection = this.dependencies.safety.inspect(brief.narrative);
       const wizardInspection = this.dependencies.safety.inspect(wizardSafetyText(context.wizard));
+      const sourceInspection = context.sourcePrompt
+        ? this.dependencies.safety.inspect(context.sourcePrompt.content)
+        : { modified: false, reasonCodes: [] as const };
       const security: SecurityRecord = Object.freeze({
         action:
-          inspection.modified || wizardInspection.modified || brief.safetyReasonCodes.length
+          inspection.modified ||
+          wizardInspection.modified ||
+          sourceInspection.modified ||
+          brief.safetyReasonCodes.length
             ? 'REDACT'
             : 'ALLOW',
         reasonCodes: Object.freeze([
@@ -69,6 +76,7 @@ export class LlmJobProcessor {
             ...brief.safetyReasonCodes,
             ...inspection.reasonCodes,
             ...wizardInspection.reasonCodes,
+            ...sourceInspection.reasonCodes,
           ]),
         ]),
       });
@@ -77,14 +85,43 @@ export class LlmJobProcessor {
         brief,
         sourcePrompt: context.sourcePrompt,
       });
+      const adapter = this.dependencies.providers.get(job.provider);
+      const capabilities = adapter.getCapabilities();
+      const composedLayers = layers(composed);
+      if (job.credentialMode === 'PLATFORM_CREDITS') {
+        const maximumInputTokens = conservativeInputTokenUpperBound(composedLayers);
+        if (maximumInputTokens > capabilities.contextWindowTokens) {
+          await this.dependencies.store.fail(job, 'INPUT_CONTEXT_LIMIT_EXCEEDED');
+          return;
+        }
+        let maximumCost;
+        try {
+          maximumCost = this.dependencies.pricing.quoteMaximum(
+            job.provider,
+            job.model,
+            maximumInputTokens,
+            capabilities.maxOutputTokens,
+          );
+        } catch {
+          await this.dependencies.store.fail(job, 'PRICING_NOT_CONFIGURED');
+          return;
+        }
+        if (
+          !context.reservationId ||
+          context.maximumAcceptedAmountMinor === null ||
+          maximumCost.amountMinor <= 0n ||
+          context.maximumAcceptedAmountMinor < maximumCost.amountMinor
+        ) {
+          await this.dependencies.store.fail(job, 'CREDIT_BUDGET_INSUFFICIENT');
+          return;
+        }
+      }
       const credential = await this.dependencies.credentials.resolve({
         ownerId: job.ownerId,
         provider: job.provider,
         mode: job.credentialMode,
         connectionId: job.connectionId,
       });
-      const adapter = this.dependencies.providers.get(job.provider);
-      const capabilities = adapter.getCapabilities();
       const abortController = new AbortController();
       const generation: GenerationInput = Object.freeze({
         provider: job.provider,
@@ -92,11 +129,12 @@ export class LlmJobProcessor {
         credential,
         wizardInput: context.wizard,
         sourcePrompt: context.sourcePrompt,
-        layers: layers(composed),
+        layers: composedLayers,
         maxOutputTokens: capabilities.maxOutputTokens,
         signal: abortController.signal,
       });
 
+      if (!(await this.dependencies.store.markProviderStarted(job))) return;
       const startedAt = this.now();
       const result = await this.invokeWithCancellation(job, abortController, () =>
         job.operation === 'PREVIEW'
@@ -105,60 +143,74 @@ export class LlmJobProcessor {
       );
       providerReturned = true;
       const latencyMs = Math.max(0, this.now() - startedAt);
+      assertUsageBounds(
+        result.usage,
+        capabilities.contextWindowTokens,
+        capabilities.maxOutputTokens,
+      );
 
       if (await this.dependencies.store.isCancellationRequested(job)) {
-        await this.cancel(context, 'late provider result discarded after cancellation');
+        await this.dependencies.store.markAmbiguous(job, 'PROVIDER_OUTCOME_UNKNOWN');
         return;
       }
 
-      let priced;
+      let priced = null;
       try {
         priced = this.dependencies.pricing.price(job.provider, job.model, result.usage);
       } catch (cause) {
-        const code = cause instanceof PricingFailure ? cause.code : 'PRICING_NOT_CONFIGURED';
-        await this.dependencies.store.markAmbiguous(job, code);
-        return;
+        if (job.credentialMode === 'PLATFORM_CREDITS') {
+          const code = cause instanceof PricingFailure ? cause.code : 'PRICING_NOT_CONFIGURED';
+          await this.dependencies.store.markAmbiguous(job, code);
+          return;
+        }
       }
-      if (context.reservationId && priced.amountMinor <= 0n) {
+      if (context.reservationId && (!priced || priced.amountMinor <= 0n)) {
         await this.dependencies.store.markAmbiguous(job, 'PRICING_USAGE_INSUFFICIENT');
         return;
       }
       if (
         context.maximumAcceptedAmountMinor !== null &&
+        priced &&
         priced.amountMinor > context.maximumAcceptedAmountMinor
       ) {
         await this.dependencies.store.fail(job, 'CREDIT_COST_LIMIT_EXCEEDED');
         return;
       }
-      if (!(await this.dependencies.store.markProviderCompleted(job, result.providerRequestId)))
-        return;
-
+      const completion = {
+        job,
+        result,
+        security,
+        latencyMs,
+        actualAmountMinor: context.reservationId ? priced!.amountMinor : null,
+        pricingVersion: priced?.pricingVersion ?? null,
+      };
+      if (!(await this.dependencies.store.markProviderCompleted(completion))) return;
       let completed: boolean;
       try {
-        completed = await this.dependencies.store.complete({
-          job,
-          result,
-          security,
-          latencyMs,
-          actualAmountMinor: context.reservationId ? priced.amountMinor : null,
-          pricingVersion: priced.pricingVersion,
-        });
+        completed = await this.dependencies.store.complete(completion);
       } catch {
-        await this.dependencies.store.markAmbiguous(job, 'PERSISTENCE_FAILED').catch(() => false);
         return;
       }
       if (!completed) {
-        await this.cancel(context, 'generation cancelled during persistence');
+        await this.dependencies.store
+          .markAmbiguous(job, 'PROVIDER_COMPLETED_RECONCILIATION_REQUIRED')
+          .catch(() => false);
         return;
       }
     } catch (cause) {
+      if (cause instanceof LeaseUnknownFailure) {
+        await this.dependencies.store.markAmbiguous(job, 'LEASE_STATE_UNKNOWN').catch(() => false);
+        return;
+      }
       const failure = sanitizedFailure(cause);
       if (providerReturned) {
         await this.dependencies.store.markAmbiguous(job, 'PERSISTENCE_FAILED').catch(() => false);
         return;
       }
       if (failure.code === 'REQUEST_CANCELLED' && context) {
-        await this.cancel(context, 'provider request aborted after cancellation');
+        await this.dependencies.store
+          .markAmbiguous(job, 'PROVIDER_OUTCOME_UNKNOWN')
+          .catch(() => false);
         return;
       }
       if (failure.retryable && job.attempts < job.maxAttempts) {
@@ -187,13 +239,21 @@ export class LlmJobProcessor {
         .then((states) => {
           if (states.some(Boolean)) controller.abort();
         })
+        .catch(() => {
+          controller.abort(new LeaseUnknownFailure());
+        })
         .finally(() => {
           checking = false;
         });
     }, this.dependencies.cancellationPollMs ?? 250);
     timer.unref?.();
     try {
-      return await invoke();
+      try {
+        return await invoke();
+      } catch (cause) {
+        if (controller.signal.reason instanceof LeaseUnknownFailure) throw controller.signal.reason;
+        throw cause;
+      }
     } finally {
       clearInterval(timer);
     }
@@ -203,6 +263,44 @@ export class LlmJobProcessor {
     void reason;
     await this.dependencies.store.cancel(context.job);
   }
+}
+
+class LeaseUnknownFailure extends Error {}
+
+function conservativeInputTokenUpperBound(layersInput: readonly PromptLayer[]): number {
+  const protocolOverheadBytes = 2_048;
+  const bytes = layersInput.reduce(
+    (total, layer) =>
+      total + Buffer.byteLength(layer.kind, 'utf8') + Buffer.byteLength(layer.content, 'utf8') + 64,
+    protocolOverheadBytes,
+  );
+  if (!Number.isSafeInteger(bytes) || bytes > 2_147_483_647)
+    throw new ProviderFailure('INPUT_INVALID');
+  return bytes;
+}
+
+function assertUsageBounds(
+  usage: NormalizedUsage,
+  maximumInputTokens: number,
+  maximumOutputTokens: number,
+): void {
+  const values = [
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.totalTokens,
+    usage.cachedInputTokens,
+    usage.reasoningTokens,
+  ].filter((value): value is number => value !== undefined);
+  if (values.some((value) => !Number.isSafeInteger(value) || value < 0 || value > 2_147_483_647))
+    throw new ProviderFailure('INVALID_RESPONSE');
+  if (
+    usage.inputTokens > maximumInputTokens ||
+    usage.outputTokens > maximumOutputTokens ||
+    usage.totalTokens !== usage.inputTokens + usage.outputTokens ||
+    (usage.cachedInputTokens ?? 0) > usage.inputTokens ||
+    (usage.reasoningTokens ?? 0) > usage.outputTokens
+  )
+    throw new ProviderFailure('INVALID_RESPONSE');
 }
 
 function layers(composed: ReturnType<PromptComposer['compose']>): readonly PromptLayer[] {

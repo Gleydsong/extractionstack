@@ -146,7 +146,16 @@ export function createPricingCatalog(env: NodeJS.ProcessEnv): PricingCatalog {
     throw new Error('LLM_PRICING_CATALOG_INVALID');
   }
   if (!Array.isArray(entries)) throw new Error('LLM_PRICING_CATALOG_INVALID');
-  return new PricingCatalog(env.LLM_PRICING_VERSION?.trim() || 'unconfigured-v1', entries);
+  const catalog = new PricingCatalog(env.LLM_PRICING_VERSION?.trim() || 'unconfigured-v1', entries);
+  const runtime = loadRuntimeEnv(env);
+  for (const [provider, models] of [
+    ['OPENAI', runtime.LLM_OPENAI_MODEL_ALLOWLIST],
+    ['GEMINI', runtime.LLM_GEMINI_MODEL_ALLOWLIST],
+  ] as const) {
+    if (models.some((model) => !catalog.has(provider, model)))
+      throw new Error('LLM_PRICING_CATALOG_INCOMPLETE');
+  }
+  return catalog;
 }
 
 function createAdapters(

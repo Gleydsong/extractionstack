@@ -76,6 +76,47 @@ export class PricingCatalog {
       amountMinor: ceilDiv(amountMicros, MICROS_PER_MINOR),
     });
   }
+
+  has(provider: LlmProvider, model: string): boolean {
+    return this.entries.has(`${provider}:${model}`);
+  }
+
+  quoteMaximum(
+    provider: LlmProvider,
+    model: string,
+    maximumInputTokens: number,
+    maximumOutputTokens: number,
+  ): PricedUsage {
+    assertTokenBound(maximumInputTokens);
+    assertTokenBound(maximumOutputTokens);
+    const entry = this.entries.get(`${provider}:${model}`);
+    if (!entry) throw new PricingFailure('PRICING_NOT_CONFIGURED');
+    const inputRate = maxBigInt(
+      BigInt(entry.inputMicrosPerMillionTokens),
+      BigInt(entry.cachedInputMicrosPerMillionTokens),
+    );
+    const outputRate = maxBigInt(
+      BigInt(entry.outputMicrosPerMillionTokens),
+      BigInt(entry.reasoningMicrosPerMillionTokens),
+    );
+    const numerator =
+      BigInt(maximumInputTokens) * inputRate + BigInt(maximumOutputTokens) * outputRate;
+    const amountMicros = ceilDiv(numerator, RATE_DENOMINATOR);
+    return Object.freeze({
+      pricingVersion: this.version,
+      amountMicros,
+      amountMinor: ceilDiv(amountMicros, MICROS_PER_MINOR),
+    });
+  }
+}
+
+function assertTokenBound(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 2_147_483_647)
+    throw new PricingFailure('PRICING_USAGE_INSUFFICIENT');
+}
+
+function maxBigInt(left: bigint, right: bigint): bigint {
+  return left > right ? left : right;
 }
 
 function ceilDiv(value: bigint, divisor: bigint): bigint {

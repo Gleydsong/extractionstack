@@ -125,6 +125,13 @@ describe('provider adapter runtime boundaries', () => {
     expect(NormalizedUsageSchema.safeParse({ ...usageFixture, totalTokens: 31 }).success).toBe(
       false,
     );
+    expect(
+      NormalizedUsageSchema.safeParse({
+        ...usageFixture,
+        inputTokens: 2_147_483_648,
+        totalTokens: 2_147_483_668,
+      }).success,
+    ).toBe(false);
   });
 
   it('bounds normalized natural-language generation and request identifiers', () => {

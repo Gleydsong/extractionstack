@@ -57,7 +57,8 @@ export interface LlmJobStorePort {
   loadAuthorizedContext(job: ClaimedLlmJob): Promise<AuthorizedLlmContext>;
   isCancellationRequested(job: ClaimedLlmJob): Promise<boolean>;
   heartbeat(job: ClaimedLlmJob): Promise<boolean>;
-  markProviderCompleted(job: ClaimedLlmJob, providerRequestId: string | null): Promise<boolean>;
+  markProviderStarted(job: ClaimedLlmJob): Promise<boolean>;
+  markProviderCompleted(command: CompletionCommand): Promise<boolean>;
   complete(command: CompletionCommand): Promise<boolean>;
   markRetry(job: ClaimedLlmJob, errorCode: string): Promise<boolean>;
   fail(job: ClaimedLlmJob, errorCode: string): Promise<boolean>;
@@ -65,6 +66,12 @@ export interface LlmJobStorePort {
   markAmbiguous(job: ClaimedLlmJob, errorCode: string): Promise<boolean>;
   cancel(job: ClaimedLlmJob): Promise<boolean>;
   reject(job: ClaimedLlmJob, reasonCode: string): Promise<boolean>;
+}
+
+export interface LlmReconciliationPort {
+  reconcileKnownSnapshot(jobId: string, reason: string): Promise<boolean>;
+  reconcileConfirmedNotRun(jobId: string, reason: string): Promise<boolean>;
+  reconcileUnknownPaid(jobId: string, actualAmountMinor: bigint, reason: string): Promise<boolean>;
 }
 
 export interface ProviderAdapterRegistryPort {

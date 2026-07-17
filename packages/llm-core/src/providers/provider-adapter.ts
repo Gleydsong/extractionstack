@@ -137,11 +137,11 @@ export type PreviewInput = z.infer<typeof PreviewInputSchema>;
 
 export const NormalizedUsageSchema = z
   .object({
-    inputTokens: z.number().int().nonnegative(),
-    cachedInputTokens: z.number().int().nonnegative().optional(),
-    outputTokens: z.number().int().nonnegative(),
-    reasoningTokens: z.number().int().nonnegative().optional(),
-    totalTokens: z.number().int().nonnegative(),
+    inputTokens: z.number().int().nonnegative().max(2_147_483_647),
+    cachedInputTokens: z.number().int().nonnegative().max(2_147_483_647).optional(),
+    outputTokens: z.number().int().nonnegative().max(2_147_483_647),
+    reasoningTokens: z.number().int().nonnegative().max(2_147_483_647).optional(),
+    totalTokens: z.number().int().nonnegative().max(2_147_483_647),
     estimatedCostMicros: z.number().int().nonnegative().nullable(),
   })
   .strict()

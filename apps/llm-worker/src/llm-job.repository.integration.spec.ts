@@ -4,6 +4,7 @@ import type { CrawledPage, PromptWizardInput } from '@extractionstack/shared';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildInvestigationReport } from '../../api/src/extract/investigation-report.builder';
 import { LlmJobRepository } from './llm-job.repository';
+import type { ClaimedLlmJob, CompletionCommand } from './llm-worker.types';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describePostgres = databaseUrl ? describe : describe.skip;
@@ -26,21 +27,10 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     expect(claimed).not.toBeNull();
     const context = await repository.loadAuthorizedContext(claimed!);
     expect(context.job.ownerId).toBe(fixture.ownerId);
-    await expect(repository.markProviderCompleted(claimed!, 'request-1')).resolves.toBe(true);
-
-    await repository.complete({
-      job: claimed!,
-      latencyMs: 42,
-      security: { action: 'ALLOW', reasonCodes: [] },
-      result: {
-        content: 'Prompt natural persistido.',
-        finishReason: 'complete',
-        providerRequestId: 'request-1',
-        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, estimatedCostMicros: 20_000 },
-      },
-      actualAmountMinor: 2n,
-      pricingVersion: 'integration-v1',
-    });
+    const command = completion(claimed!, 'request-1', 2n);
+    await expect(repository.markProviderStarted(claimed!)).resolves.toBe(true);
+    await expect(repository.markProviderCompleted(command)).resolves.toBe(true);
+    await repository.complete(command);
 
     await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
     await expect(
@@ -122,9 +112,7 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     expect(currentClaim!.attempts).toBe(staleClaim!.attempts + 1);
 
     await expect(repository.heartbeat(staleClaim!)).resolves.toBe(false);
-    await expect(repository.markProviderCompleted(staleClaim!, 'stale-request')).resolves.toBe(
-      false,
-    );
+    await expect(repository.markProviderStarted(staleClaim!)).resolves.toBe(false);
     await expect(repository.markRetry(staleClaim!, 'TIMEOUT')).resolves.toBe(false);
     await expect(repository.fail(staleClaim!, 'INTERNAL')).resolves.toBe(false);
     await expect(repository.deadLetter(staleClaim!, 'TIMEOUT')).resolves.toBe(false);
@@ -168,10 +156,12 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     ).toBe(1);
   });
 
-  it('atomically marks a stale provider-completed lease ambiguous instead of calling again', async () => {
+  it('finalizes a stale normalized provider snapshot without another provider call', async () => {
     const fixture = await createFixture(prisma, true);
     const claimed = await repository.claim(fixture.jobId);
-    await repository.markProviderCompleted(claimed!, 'paid-request');
+    const command = completion(claimed!, 'paid-request', 2n);
+    await repository.markProviderStarted(claimed!);
+    await repository.markProviderCompleted(command);
     await prisma.promptGenerationJob.update({
       where: { id: fixture.jobId },
       data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
@@ -180,12 +170,107 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
     await expect(
       prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
-    ).resolves.toMatchObject({ status: 'AMBIGUOUS', errorCode: 'PERSISTENCE_FAILED' });
+    ).resolves.toMatchObject({ status: 'SUCCEEDED', providerStage: 'COMPLETED' });
+    expect(
+      await prisma.creditLedgerEntry.count({
+        where: { jobId: fixture.jobId, kind: 'CONFIRMATION' },
+      }),
+    ).toBe(1);
+  });
+
+  it('holds a stale STARTED reservation until explicit not-run reconciliation', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.markProviderStarted(claimed!);
+    await prisma.promptGenerationJob.update({
+      where: { id: fixture.jobId },
+      data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({ status: 'AMBIGUOUS', providerStage: 'STARTED' });
+    expect(await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId } })).toBe(1);
+
+    await expect(
+      repository.reconcileConfirmedNotRun(fixture.jobId, 'operator confirmed no request'),
+    ).resolves.toBe(true);
+    await expect(repository.reconcileConfirmedNotRun(fixture.jobId, 'duplicate')).resolves.toBe(
+      false,
+    );
     expect(
       await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId, kind: 'REVERSAL' } }),
     ).toBe(1);
   });
+
+  it('settles an unknown paid outcome once through explicit adjustment', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.markProviderStarted(claimed!);
+    await repository.markAmbiguous(claimed!, 'LEASE_STATE_UNKNOWN');
+
+    await expect(
+      repository.reconcileUnknownPaid(fixture.jobId, 40n, 'provider invoice confirmed'),
+    ).resolves.toBe(true);
+    await expect(repository.reconcileUnknownPaid(fixture.jobId, 40n, 'duplicate')).resolves.toBe(
+      false,
+    );
+    const adjustment = await prisma.creditLedgerEntry.findFirstOrThrow({
+      where: { jobId: fixture.jobId, kind: 'ADJUSTMENT' },
+    });
+    expect(adjustment.amountMinor).toBe(60n);
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({ status: 'FAILED', errorCode: 'RECONCILED_PAID_UNKNOWN' });
+  });
+
+  it('explicitly reconciles a known completed snapshot exactly once', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    const command = completion(claimed!, 'known-request', 2n);
+    await repository.markProviderStarted(claimed!);
+    await repository.markProviderCompleted(command);
+    await repository.markAmbiguous(claimed!, 'PERSISTENCE_FAILED');
+
+    await expect(
+      repository.reconcileKnownSnapshot(fixture.jobId, 'operator replayed normalized snapshot'),
+    ).resolves.toBe(true);
+    await expect(repository.reconcileKnownSnapshot(fixture.jobId, 'duplicate')).resolves.toBe(
+      false,
+    );
+    expect(
+      await prisma.creditLedgerEntry.count({
+        where: { jobId: fixture.jobId, kind: 'CONFIRMATION' },
+      }),
+    ).toBe(1);
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({
+      status: 'SUCCEEDED',
+      reconciliationReason: 'operator replayed normalized snapshot',
+    });
+  });
 });
+
+function completion(
+  job: ClaimedLlmJob,
+  providerRequestId: string,
+  actualAmountMinor: bigint | null,
+): CompletionCommand {
+  return {
+    job,
+    latencyMs: 42,
+    security: { action: 'ALLOW', reasonCodes: [] },
+    result: {
+      content: 'Prompt natural persistido.',
+      finishReason: 'complete',
+      providerRequestId,
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, estimatedCostMicros: null },
+    },
+    actualAmountMinor,
+    pricingVersion: actualAmountMinor === null ? null : 'integration-v1',
+  };
+}
 
 async function createFixture(client: PrismaClient, withCredits: boolean) {
   const suffix = randomUUID();

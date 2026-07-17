@@ -143,6 +143,12 @@ enum PromptJobStatus {
   AMBIGUOUS
 }
 
+enum ProviderExecutionStage {
+  NOT_STARTED
+  STARTED
+  COMPLETED
+}
+
 enum PreviewStatus {
   QUEUED
   RUNNING
@@ -280,38 +286,43 @@ model PromptVersion {
 }
 
 model PromptGenerationJob {
-  id                    String              @id @default(cuid())
+  id                    String                 @id @default(cuid())
   ownerId               String
-  owner                 User                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner                 User                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   projectId             String
-  project               PromptProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project               PromptProject          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   operation             PromptOperation
   provider              LlmProvider
-  model                 String              @db.VarChar(128)
+  model                 String                 @db.VarChar(128)
   credentialMode        CredentialMode
   connectionId          String?
-  connection            AiConnection?       @relation(fields: [connectionId], references: [id], onDelete: SetNull)
-  idempotencyKey        String              @db.VarChar(160)
-  requestMetadata       Json                @default("{}")
-  status                PromptJobStatus     @default(QUEUED)
-  attempts              Int                 @default(0)
-  maxAttempts           Int                 @default(3)
+  connection            AiConnection?          @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  idempotencyKey        String                 @db.VarChar(160)
+  requestMetadata       Json                   @default("{}")
+  status                PromptJobStatus        @default(QUEUED)
+  attempts              Int                    @default(0)
+  maxAttempts           Int                    @default(3)
   sourcePromptVersionId String?
-  sourcePromptVersion   PromptVersion?      @relation("SourcePromptVersion", fields: [sourcePromptVersionId], references: [id], onDelete: Restrict)
+  sourcePromptVersion   PromptVersion?         @relation("SourcePromptVersion", fields: [sourcePromptVersionId], references: [id], onDelete: Restrict)
   resultPromptVersionId String?
-  resultPromptVersion   PromptVersion?      @relation("ResultPromptVersion", fields: [resultPromptVersionId], references: [id], onDelete: SetNull)
-  errorCode             String?             @db.VarChar(64)
-  errorMessage          String?             @db.VarChar(1000)
+  resultPromptVersion   PromptVersion?         @relation("ResultPromptVersion", fields: [resultPromptVersionId], references: [id], onDelete: SetNull)
+  errorCode             String?                @db.VarChar(64)
+  errorMessage          String?                @db.VarChar(1000)
   retryable             Boolean?
-  queuedAt              DateTime            @default(now())
+  queuedAt              DateTime               @default(now())
   startedAt             DateTime?
   finishedAt            DateTime?
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
-  leaseToken            String?             @db.Uuid
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  leaseToken            String?                @db.Uuid
   heartbeatAt           DateTime?
   providerCompletedAt   DateTime?
-  providerRequestId     String?             @db.VarChar(160)
+  providerRequestId     String?                @db.VarChar(160)
+  providerStage         ProviderExecutionStage @default(NOT_STARTED)
+  providerStartedAt     DateTime?
+  providerSnapshot      Json?
+  reconciliationReason  String?                @db.VarChar(500)
+  reconciledAt          DateTime?
   previews              PromptPreview[]
   usage                 LlmUsage?
   securityDecisions     SecurityDecision[]
