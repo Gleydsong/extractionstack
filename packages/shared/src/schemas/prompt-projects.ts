@@ -32,6 +32,87 @@ const PromptDestinationSchema = z.enum([
   'bolt',
 ]);
 
+const MaximumCostMinorSchema = z
+  .string()
+  .regex(/^[1-9][0-9]{0,12}$/)
+  .nullable();
+
+const PromptExecutionRequestObjectSchema = z
+  .object({
+    provider: LlmProviderSchema,
+    model: z.string().trim().min(1).max(128),
+    credentialMode: CredentialModeSchema,
+    connectionId: PublicIdSchema.nullable(),
+    acceptPlatformCharge: z.boolean(),
+    maximumCostMinor: MaximumCostMinorSchema,
+  })
+  .strict();
+
+function validateExecutionRequest(
+  value: z.infer<typeof PromptExecutionRequestObjectSchema>,
+  context: z.RefinementCtx,
+): void {
+  const authorization = ProviderAuthorizationSchema.safeParse({
+    provider: value.provider,
+    credentialMode: value.credentialMode,
+  });
+  if (!authorization.success) {
+    for (const issue of authorization.error.issues) context.addIssue(issue);
+  }
+  if (value.credentialMode === 'PLATFORM_CREDITS') {
+    if (value.connectionId !== null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['connectionId'],
+        message: 'connection is not used for platform credits',
+      });
+    }
+    if (value.maximumCostMinor === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['maximumCostMinor'],
+        message: 'maximum cost is required for platform credits',
+      });
+    }
+  } else {
+    if (value.connectionId === null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['connectionId'],
+        message: 'connection is required for user credentials',
+      });
+    }
+    if (value.acceptPlatformCharge || value.maximumCostMinor !== null) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['credentialMode'],
+        message: 'platform charge fields are not accepted for user credentials',
+      });
+    }
+  }
+}
+
+export const PromptGenerationRequestSchema =
+  PromptExecutionRequestObjectSchema.superRefine(validateExecutionRequest);
+export type PromptGenerationRequest = z.infer<typeof PromptGenerationRequestSchema>;
+
+export const PromptAdaptationRequestSchema = PromptExecutionRequestObjectSchema.extend({
+  destination: PromptDestinationSchema.exclude(['universal']),
+}).superRefine(validateExecutionRequest);
+export type PromptAdaptationRequest = z.infer<typeof PromptAdaptationRequestSchema>;
+
+export const PromptPreviewRequestSchema =
+  PromptExecutionRequestObjectSchema.superRefine(validateExecutionRequest);
+export type PromptPreviewRequest = z.infer<typeof PromptPreviewRequestSchema>;
+
+export const PromptProjectListQuerySchema = z
+  .object({
+    cursor: PublicIdSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+export type PromptProjectListQuery = z.infer<typeof PromptProjectListQuerySchema>;
+
 export const PromptJobStatusSchema = z.enum([
   'QUEUED',
   'RUNNING',
@@ -74,6 +155,14 @@ export const PromptProjectSchema = z
   })
   .strict();
 export type PromptProject = z.infer<typeof PromptProjectSchema>;
+
+export const PromptProjectListResponseSchema = z
+  .object({
+    items: z.array(PromptProjectSchema).max(100),
+    nextCursor: PublicIdSchema.nullable(),
+  })
+  .strict();
+export type PromptProjectListResponse = z.infer<typeof PromptProjectListResponseSchema>;
 
 export const PromptVersionSchema = z
   .object({

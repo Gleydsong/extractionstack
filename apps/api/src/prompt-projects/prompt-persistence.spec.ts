@@ -9,6 +9,10 @@ const migrationPath = path.resolve(
 );
 const schema = readFileSync(prismaPath, 'utf8');
 const migration = readFileSync(migrationPath, 'utf8');
+const taskNineMigrationPath = path.resolve(
+  __dirname,
+  '../../prisma/migrations/20260717040000_enforce_prompt_version_invariants/migration.sql',
+);
 
 function modelBlock(name: string): string {
   const match = schema.match(new RegExp(`model ${name} \\{([\\s\\S]*?)\\n\\}`));
@@ -107,5 +111,18 @@ describe('prompt persistence schema', () => {
     expect([...prismaFields, ...sqlColumns].filter((name) => forbiddenColumn.test(name))).toEqual(
       [],
     );
+  });
+
+  it('enforces prompt version immutability and same-project references in PostgreSQL', () => {
+    const taskNineMigration = readFileSync(taskNineMigrationPath, 'utf8');
+    expect(taskNineMigration).toContain('PromptVersion_append_only_check');
+    expect(taskNineMigration).toContain('BEFORE UPDATE OR DELETE ON "PromptVersion"');
+    expect(taskNineMigration).toContain('PromptProject_current_version_scope_check');
+    expect(taskNineMigration).toContain('PromptVersion_source_scope_check');
+    expect(taskNineMigration).toContain('PromptGenerationJob_source_scope_check');
+  });
+
+  it('stores only bounded internal job metadata needed by the worker', () => {
+    expect(modelBlock('PromptGenerationJob')).toMatch(/requestMetadata\s+Json/);
   });
 });

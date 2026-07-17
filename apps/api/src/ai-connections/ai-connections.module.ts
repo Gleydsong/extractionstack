@@ -187,7 +187,7 @@ export class GeminiOAuthClient implements OAuthTokenClientPort {
       },
     },
   ],
-  exports: [AiConnectionsService],
+  exports: [AiConnectionsService, ProviderRegistry],
 })
 export class AiConnectionsModule {}
 

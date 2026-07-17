@@ -8,6 +8,7 @@ import { ExtractionsModule } from './extractions/extractions.module.js';
 import { OperationsModule } from './operations/operations.module.js';
 import { AiConnectionsModule } from './ai-connections/ai-connections.module.js';
 import { CreditsModule } from './credits/credits.module.js';
+import { PromptProjectsModule } from './prompt-projects/prompt-projects.module.js';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { CreditsModule } from './credits/credits.module.js';
     OperationsModule,
     AiConnectionsModule,
     CreditsModule,
+    PromptProjectsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

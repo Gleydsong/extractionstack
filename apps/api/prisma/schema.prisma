@@ -289,6 +289,7 @@ model PromptGenerationJob {
   connectionId          String?
   connection            AiConnection?       @relation(fields: [connectionId], references: [id], onDelete: SetNull)
   idempotencyKey        String              @db.VarChar(160)
+  requestMetadata       Json                @default("{}")
   status                PromptJobStatus     @default(QUEUED)
   attempts              Int                 @default(0)
   maxAttempts           Int                 @default(3)

@@ -5,10 +5,63 @@ import {
   PublicIsoDateTimeSchema,
 } from './ai-connections.js';
 import {
+  PromptAdaptationRequestSchema,
+  PromptGenerationRequestSchema,
+  PromptPreviewRequestSchema,
+  PromptProjectListQuerySchema,
   PromptGenerationJobSchema,
   PromptPreviewSchema,
   PromptWizardInputSchema,
 } from './prompt-projects.js';
+
+describe('prompt project command contracts', () => {
+  const execution = {
+    provider: 'OPENAI',
+    model: 'configured-model',
+    credentialMode: 'PLATFORM_CREDITS',
+    connectionId: null,
+    acceptPlatformCharge: true,
+    maximumCostMinor: '100',
+  } as const;
+
+  it('accepts only strict bounded execution commands', () => {
+    expect(PromptGenerationRequestSchema.parse(execution)).toEqual(execution);
+    expect(() =>
+      PromptGenerationRequestSchema.parse({ ...execution, rawProviderPayload: {} }),
+    ).toThrow();
+    expect(() =>
+      PromptGenerationRequestSchema.parse({ ...execution, maximumCostMinor: '1.5' }),
+    ).toThrow();
+  });
+
+  it('binds adaptation and preview commands to natural-language public inputs', () => {
+    expect(PromptAdaptationRequestSchema.parse({ ...execution, destination: 'codex' })).toEqual({
+      ...execution,
+      destination: 'codex',
+    });
+    expect(PromptPreviewRequestSchema.parse(execution)).toEqual(execution);
+  });
+
+  it('requires owned connection references for user credentials and forbids them for credits', () => {
+    expect(() =>
+      PromptGenerationRequestSchema.parse({
+        ...execution,
+        credentialMode: 'API_KEY',
+      }),
+    ).toThrow();
+    expect(() =>
+      PromptGenerationRequestSchema.parse({
+        ...execution,
+        connectionId: 'cm1234567890abcdef',
+      }),
+    ).toThrow();
+  });
+
+  it('bounds cursor pagination', () => {
+    expect(PromptProjectListQuerySchema.parse({})).toEqual({ limit: 20 });
+    expect(() => PromptProjectListQuerySchema.parse({ limit: 101 })).toThrow();
+  });
+});
 
 const wizardFixture = {
   extractionId: 'cm1234567890abcdef',
@@ -81,54 +134,72 @@ describe('LLM public contracts', () => {
   });
 
   it('rejects oversized wizard instructions', () => {
-    expect(() => PromptWizardInputSchema.parse({
-      ...wizardFixture,
-      freeInstructions: 'x'.repeat(8_001),
-    })).toThrow();
+    expect(() =>
+      PromptWizardInputSchema.parse({
+        ...wizardFixture,
+        freeInstructions: 'x'.repeat(8_001),
+      }),
+    ).toThrow();
   });
 
   it('never accepts a raw provider payload in a public preview', () => {
     expect(PromptPreviewSchema.parse(previewFixture)).toEqual(previewFixture);
-    expect(() => PromptPreviewSchema.parse({
-      ...previewFixture,
-      rawResponse: { secret: true },
-    })).toThrow();
+    expect(() =>
+      PromptPreviewSchema.parse({
+        ...previewFixture,
+        rawResponse: { secret: true },
+      }),
+    ).toThrow();
   });
 
   it('enforces the provider credential-mode authorization matrix', () => {
-    expect(ProviderAuthorizationSchema.safeParse({
-      provider: 'FAKE',
-      credentialMode: 'PLATFORM_CREDITS',
-    }).success).toBe(true);
-    expect(ProviderAuthorizationSchema.safeParse({
-      provider: 'OPENAI',
-      credentialMode: 'API_KEY',
-    }).success).toBe(true);
-    expect(ProviderAuthorizationSchema.safeParse({
-      provider: 'GEMINI',
-      credentialMode: 'OAUTH',
-    }).success).toBe(true);
-    expect(ProviderAuthorizationSchema.safeParse({
-      provider: 'OPENAI',
-      credentialMode: 'OAUTH',
-    }).success).toBe(false);
-    expect(ProviderAuthorizationSchema.safeParse({
-      provider: 'FAKE',
-      credentialMode: 'API_KEY',
-    }).success).toBe(false);
+    expect(
+      ProviderAuthorizationSchema.safeParse({
+        provider: 'FAKE',
+        credentialMode: 'PLATFORM_CREDITS',
+      }).success,
+    ).toBe(true);
+    expect(
+      ProviderAuthorizationSchema.safeParse({
+        provider: 'OPENAI',
+        credentialMode: 'API_KEY',
+      }).success,
+    ).toBe(true);
+    expect(
+      ProviderAuthorizationSchema.safeParse({
+        provider: 'GEMINI',
+        credentialMode: 'OAUTH',
+      }).success,
+    ).toBe(true);
+    expect(
+      ProviderAuthorizationSchema.safeParse({
+        provider: 'OPENAI',
+        credentialMode: 'OAUTH',
+      }).success,
+    ).toBe(false);
+    expect(
+      ProviderAuthorizationSchema.safeParse({
+        provider: 'FAKE',
+        credentialMode: 'API_KEY',
+      }).success,
+    ).toBe(false);
   });
 
   it('applies provider authorization to connections and generation jobs', () => {
     expect(AiConnectionSchema.safeParse(aiConnectionFixture).success).toBe(true);
-    expect(AiConnectionSchema.safeParse({
-      ...aiConnectionFixture,
-      credentialMode: 'OAUTH',
-    }).success).toBe(false);
+    expect(
+      AiConnectionSchema.safeParse({
+        ...aiConnectionFixture,
+        credentialMode: 'OAUTH',
+      }).success,
+    ).toBe(false);
     expect(PromptGenerationJobSchema.safeParse(promptJobFixture).success).toBe(true);
-    expect(PromptGenerationJobSchema.safeParse({
-      ...promptJobFixture,
-      credentialMode: 'OAUTH',
-    }).success).toBe(false);
+    expect(
+      PromptGenerationJobSchema.safeParse({
+        ...promptJobFixture,
+        credentialMode: 'OAUTH',
+      }).success,
+    ).toBe(false);
   });
 
   it('bounds ISO datetimes and reuses the bound in public responses', () => {
@@ -136,14 +207,18 @@ describe('LLM public contracts', () => {
 
     expect(PublicIsoDateTimeSchema.safeParse(now).success).toBe(true);
     expect(PublicIsoDateTimeSchema.safeParse(oversizedIsoDateTime).success).toBe(false);
-    expect(AiConnectionSchema.safeParse({
-      ...aiConnectionFixture,
-      createdAt: oversizedIsoDateTime,
-    }).success).toBe(false);
-    expect(PromptPreviewSchema.safeParse({
-      ...previewFixture,
-      createdAt: oversizedIsoDateTime,
-    }).success).toBe(false);
+    expect(
+      AiConnectionSchema.safeParse({
+        ...aiConnectionFixture,
+        createdAt: oversizedIsoDateTime,
+      }).success,
+    ).toBe(false);
+    expect(
+      PromptPreviewSchema.safeParse({
+        ...previewFixture,
+        createdAt: oversizedIsoDateTime,
+      }).success,
+    ).toBe(false);
   });
 
   it('never returns credential material', () => {
