@@ -1,11 +1,14 @@
 import {
+  BadRequestException,
   ConflictException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { ProviderRegistry } from '@extractionstack/llm-core';
+import { ProviderFailure, ProviderRegistry } from '@extractionstack/llm-core';
 import {
   PromptGenerationJobSchema,
   PromptProjectListResponseSchema,
@@ -62,7 +65,7 @@ export interface PromptProjectsRepositoryPort {
     idempotencyKey: string,
   ): Promise<{ result: PromptGenerationJob; ownerId: string; created: boolean }>;
   findJobOwned(actor: Auth0User, id: string): Promise<PromptGenerationJob | null>;
-  failJob(actor: Auth0User, id: string, errorCode: string): Promise<void>;
+  failJob(actor: Auth0User, id: string, errorCode: string): Promise<PromptGenerationJob | null>;
   requestCancellation(
     actor: Auth0User,
     id: string,
@@ -192,13 +195,7 @@ export class PromptProjectsService {
   async cancel(actor: Auth0User, id: string, idempotencyKey: string): Promise<PromptGenerationJob> {
     const current = await this.repository.findJobOwned(actor, id);
     if (!current) throw notFound();
-    if (!['QUEUED', 'RUNNING', 'CANCELLED'].includes(current.status)) {
-      throw new ConflictException({ code: 'CONFLICT', message: 'job cannot be cancelled' });
-    }
-    const updated =
-      current.status === 'CANCELLED'
-        ? current
-        : await this.repository.requestCancellation(actor, id, idempotencyKey);
+    const updated = await this.repository.requestCancellation(actor, id, idempotencyKey);
     if (!updated) {
       throw new ConflictException({ code: 'CONFLICT', message: 'job state changed' });
     }
@@ -253,7 +250,7 @@ export class PromptProjectsService {
         reservationId = reservation.id;
       } catch (error) {
         await this.repository.failJob(actor, outcome.result.id, 'SUBMISSION_FAILED');
-        throw error;
+        throw mapCreditFailure(error);
       }
     }
 
@@ -261,9 +258,15 @@ export class PromptProjectsService {
       await this.queue.enqueue(outcome.result.id);
       return PromptGenerationJobSchema.parse(outcome.result);
     } catch {
-      await this.repository.failJob(actor, outcome.result.id, 'QUEUE_UNAVAILABLE');
-      if (reservationId) {
+      const failed = await this.repository.failJob(actor, outcome.result.id, 'QUEUE_UNAVAILABLE');
+      if (failed && reservationId) {
         await this.credits.reverse({ reservationId, reason: 'queue submission failed' });
+      }
+      if (!failed) {
+        const current = await this.repository.findJobOwned(actor, outcome.result.id);
+        if (current && current.status !== 'QUEUED') {
+          return PromptGenerationJobSchema.parse(current);
+        }
       }
       throw new ServiceUnavailableException({
         code: 'QUEUE_UNAVAILABLE',
@@ -278,15 +281,18 @@ export class PromptProjectsService {
     operation: JobCommand['operation'],
   ): Promise<void> {
     if (request.credentialMode === 'PLATFORM_CREDITS' && !request.acceptPlatformCharge) {
-      const error = new ConflictException({
+      throw new ConflictException({
         code: 'COST_CONSENT_REQUIRED',
-        message: 'platform charge consent is required',
+        message: 'Confirm the maximum platform credit charge before continuing.',
       });
-      error.message = 'COST_CONSENT_REQUIRED';
-      throw error;
     }
-    const capabilities = this.registry.get(request.provider);
-    this.registry.assertModel(request.provider, request.model);
+    let capabilities: ReturnType<ProviderRegistry['get']>;
+    try {
+      capabilities = this.registry.get(request.provider);
+      this.registry.assertModel(request.provider, request.model);
+    } catch (error) {
+      throw mapProviderFailure(error);
+    }
     if (
       !capabilities.enabled ||
       capabilities.circuitBreakerOpen ||
@@ -294,7 +300,7 @@ export class PromptProjectsService {
     ) {
       throw new ServiceUnavailableException({
         code: 'PROVIDER_UNAVAILABLE',
-        message: 'provider is unavailable',
+        message: 'The selected provider is currently unavailable. Try again later.',
       });
     }
     if (operation === 'PREVIEW' && !capabilities.previewEligible) {
@@ -313,6 +319,48 @@ export class PromptProjectsService {
       if (!found) throw notFound();
     }
   }
+}
+
+function mapProviderFailure(error: unknown): HttpException {
+  if (error instanceof ProviderFailure && error.code === 'MODEL_UNAVAILABLE') {
+    return new BadRequestException({
+      code: 'MODEL_UNAVAILABLE',
+      message: 'The selected model is unavailable. Choose a configured model and try again.',
+    });
+  }
+  return new ServiceUnavailableException({
+    code: 'PROVIDER_UNAVAILABLE',
+    message: 'The selected provider is currently unavailable. Try again later.',
+  });
+}
+
+function mapCreditFailure(error: unknown): HttpException {
+  const code = error instanceof Error ? error.message : '';
+  if (code === 'INSUFFICIENT_CREDITS') {
+    return new HttpException(
+      {
+        code: 'INSUFFICIENT_CREDITS',
+        message: 'There are not enough platform credits for this request.',
+      },
+      HttpStatus.PAYMENT_REQUIRED,
+    );
+  }
+  if (code === 'CREDIT_COST_LIMIT_EXCEEDED') {
+    return new ConflictException({
+      code: 'COST_LIMIT_EXCEEDED',
+      message: 'The estimated charge exceeds the confirmed maximum cost.',
+    });
+  }
+  if (code === 'CREDIT_AMOUNT_INVALID' || code === 'CREDIT_COMMAND_INVALID') {
+    return new BadRequestException({
+      code: 'VALIDATION',
+      message: 'The platform credit amount is invalid.',
+    });
+  }
+  return new ServiceUnavailableException({
+    code: 'INTERNAL',
+    message: 'Platform credits are temporarily unavailable. Try again later.',
+  });
 }
 
 function notFound(): NotFoundException {

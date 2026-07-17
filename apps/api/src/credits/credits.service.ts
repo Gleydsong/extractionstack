@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { MAXIMUM_COST_MINOR } from '@extractionstack/shared';
 import { CREDITS_REPOSITORY, type CreditsRepositoryPort } from './credits.repository.js';
 
-const MAX_AMOUNT_MINOR = 1_000_000_000_000n;
 const MAX_ID_LENGTH = 191;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 120;
 const MAX_REASON_LENGTH = 500;
@@ -150,7 +150,7 @@ function assertText(value: string, maxLength: number): void {
 function assertAmount(value: bigint, allowZero: boolean): void {
   if (
     typeof value !== 'bigint' ||
-    value > MAX_AMOUNT_MINOR ||
+    value > MAXIMUM_COST_MINOR ||
     (allowZero ? value < 0n : value <= 0n)
   ) {
     throw new Error('CREDIT_AMOUNT_INVALID');

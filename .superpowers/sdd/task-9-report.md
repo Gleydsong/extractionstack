@@ -27,12 +27,20 @@ Generation execution remains intentionally absent; Task 10 owns the LLM worker.
 - Added truthful registry/model/mode checks and owner-scoped `ACTIVE` connection checks. Platform
   credits require explicit consent and a positive decimal maximum; there is no automatic paid
   fallback.
-- Added reservation-before-enqueue orchestration. Queue failure marks the owned job terminal,
-  reverses the reservation, sanitizes the public failure, and reconciles an open reservation on
-  replay if the first reversal was interrupted.
+- Added reservation-before-enqueue orchestration. An unambiguous queue failure changes only an
+  owned `QUEUED` job to `FAILED`; the credit reservation is reversed only after that guarded
+  transition is confirmed. If `add` has an ambiguous outcome and the job is already `RUNNING` or
+  terminal, its state and reservation are preserved for safe reconciliation.
 - Queued cancellation becomes terminal `CANCELLED`, removes only waiting/delayed Bull jobs, and
   reverses an open platform-credit reservation exactly once. Running cancellation becomes
   `CANCEL_REQUESTED` for cooperative Task 10 handling.
+- Cancellation uses durable `MutationIdempotency` with the job ID in the request hash and commits
+  idempotency, state transition, and audit in one transaction. A replay refreshes current state and
+  retries only pending queue/removal or credit-reversal effects; reusing the key for another job
+  conflicts before either job is mutated.
+- Shared contracts cap platform credit consent at exactly `1_000_000_000_000` minor units and the
+  API exposes controlled, actionable error codes for consent, provider/model availability, credit
+  insufficiency, and cost limits without leaking provider or infrastructure details.
 - Added transaction-safe prompt version sequence allocation using a per-project PostgreSQL
   advisory transaction lock.
 - Added PostgreSQL triggers for append-only prompt versions, same-project source/result/current
@@ -84,18 +92,34 @@ replay returned the stored `QUEUED` snapshot rather than the current terminal ro
 caused a second reversal attempt against an already settled reservation. Both defects were fixed
 before the suite was expanded.
 
+### Review-correction RED
+
+Focused tests were added before the corrective implementation and failed for the intended gaps:
+
+- shared cost consent accepted `1_000_000_000_001` minor units;
+- controlled prompt error codes were rejected by the public error schema;
+- provider/model failures escaped without actionable sanitized responses;
+- an ambiguous BullMQ `add` after a concurrent `RUNNING` or terminal transition attempted the
+  wrong failure/reversal path;
+- cancellation replay bypassed the repository instead of using durable mutation idempotency;
+- the same cancellation key was not proven to conflict across different jobs.
+
+After the fixes, the focused shared/API suites, the real PostgreSQL race/idempotency suite, and the
+real Redis queue suite all passed.
+
 ### Final GREEN
 
 ```text
 pnpm --filter @extractionstack/shared test -- prompt-projects.spec.ts
 # 11 passed
 
-pnpm --filter @extractionstack/api test -- prompt-projects prompt-generation.queue
-# 32 passed, 10 environment-gated integration tests skipped in this no-env invocation
+pnpm --filter @extractionstack/api test -- \
+  prompt-projects prompt-generation.queue schemas.spec.ts credits.service.spec.ts
+# 57 passed, 11 environment-gated integration tests skipped in this no-env invocation
 
 TEST_DATABASE_URL=postgresql://.../extractionstack_task9_fresh?schema=public \
   pnpm --filter @extractionstack/api test -- prompt-projects.repository.integration.spec.ts
-# 8 passed against PostgreSQL 16
+# 9 passed against PostgreSQL 16
 
 TEST_REDIS_URL=redis://127.0.0.1:6379 \
   pnpm --filter @extractionstack/api test -- prompt-generation.queue.integration.spec.ts
@@ -105,13 +129,14 @@ TEST_REDIS_URL=redis://127.0.0.1:6379 \
 The PostgreSQL suite covers extraction/project/connection ownership, inaccessible cursor scope,
 cross-project references, durable idempotency and audit uniqueness, current terminal replay,
 concurrent version sequences, version update/delete rejection, current-version relationship,
-queue-failure credit rollback, and queued-cancellation credit reversal.
+guarded queue-failure credit rollback, ambiguous enqueue after a concurrent worker claim, durable
+cancellation replay/cross-job key conflict, and queued-cancellation credit reversal.
 
 ## Migration verification
 
 A fresh local database `extractionstack_task9_fresh` was created. `prisma migrate deploy` applied
 all seven migrations from the initial schema through
-`20260717040000_enforce_prompt_version_invariants` successfully. The 8-test PostgreSQL integration
+`20260717040000_enforce_prompt_version_invariants` successfully. The 9-test PostgreSQL integration
 suite then passed against that fresh database.
 
 ## Repository verification
@@ -126,7 +151,7 @@ Result: PASS.
 
 - lint: all workspace packages passed;
 - typecheck: all workspace packages and API E2E TypeScript passed;
-- tests: 380 passed across the monorepo; 26 environment-gated tests skipped in the ordinary
+- tests: 389 passed across the monorepo; 27 environment-gated tests skipped in the ordinary
   no-env root run and were covered separately for Task 9 with real PostgreSQL/Redis;
 - build: shared, LLM core, worker, web production bundle, and Nest API passed;
 - `git diff --check`: passed.
@@ -134,7 +159,9 @@ Result: PASS.
 ## Boundaries and remaining work
 
 - Task 9 does not execute LLM requests, compose provider payloads, persist provider responses, or
-  create prompt results in a worker. Task 10 must consume `{ jobId }`, enforce cooperative running
-  cancellation, and use the repository's immutable version creation path.
+  create prompt results in a worker. Task 10 must consume `{ jobId }` and atomically claim work only
+  through a guarded database transition from `QUEUED` to `RUNNING`. If that transition does not
+  occur, the worker must not execute a provider request or charge credits. It must also enforce
+  cooperative running cancellation and use the repository's immutable version creation path.
 - The standard Vitest invocation intentionally skips real PostgreSQL/Redis suites when
   `TEST_DATABASE_URL`/`TEST_REDIS_URL` are absent; both suites were explicitly run and passed here.

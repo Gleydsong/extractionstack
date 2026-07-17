@@ -214,58 +214,82 @@ export class PromptProjectsRepository implements PromptProjectsRepositoryPort {
     return job ? publicJob(job) : null;
   }
 
-  async failJob(actor: Auth0User, id: string, errorCode: string): Promise<void> {
-    await this.prisma.promptGenerationJob.updateMany({
-      where: { id, owner: { auth0Sub: actor.sub }, status: 'QUEUED' },
-      data: {
-        status: 'FAILED',
-        errorCode: safeCode(errorCode),
-        errorMessage: 'generation submission failed',
-        retryable: true,
-        finishedAt: new Date(),
-      },
+  async failJob(
+    actor: Auth0User,
+    id: string,
+    errorCode: string,
+  ): Promise<PromptGenerationJob | null> {
+    return this.prisma.$transaction(async (transaction) => {
+      const updated = await transaction.promptGenerationJob.updateMany({
+        where: { id, owner: { auth0Sub: actor.sub }, status: 'QUEUED' },
+        data: {
+          status: 'FAILED',
+          errorCode: safeCode(errorCode),
+          errorMessage: 'generation submission failed',
+          retryable: true,
+          finishedAt: new Date(),
+        },
+      });
+      if (updated.count !== 1) return null;
+      const job = await transaction.promptGenerationJob.findFirst({
+        where: { id, owner: { auth0Sub: actor.sub }, status: 'FAILED' },
+      });
+      return job ? publicJob(job) : null;
     });
   }
 
   async requestCancellation(
     actor: Auth0User,
     id: string,
-    _idempotencyKey: string,
+    idempotencyKey: string,
   ): Promise<PromptGenerationJob | null> {
-    return this.prisma.$transaction(async (transaction) => {
-      const candidate = await transaction.promptGenerationJob.findFirst({
-        where: { id, owner: { auth0Sub: actor.sub }, status: { in: ['QUEUED', 'RUNNING'] } },
-        select: { id: true, status: true },
-      });
-      if (!candidate) return null;
-      const next = candidate.status === 'QUEUED' ? 'CANCELLED' : 'CANCEL_REQUESTED';
-      const updated = await transaction.promptGenerationJob.updateMany({
-        where: { id: candidate.id, status: candidate.status },
-        data: {
-          status: next,
-          ...(next === 'CANCELLED' ? { finishedAt: new Date() } : {}),
+    const owner = await this.prisma.user.findUnique({ where: { auth0Sub: actor.sub } });
+    if (!owner) return null;
+    const mutation = durableInput('prompt-job.cancel', idempotencyKey, { jobId: id });
+    try {
+      const outcome = await this.executeDurable(
+        owner.id,
+        mutation,
+        PromptGenerationJobSchema,
+        async (transaction) => {
+          const candidate = await transaction.promptGenerationJob.findFirst({
+            where: { id, ownerId: owner.id, status: { in: ['QUEUED', 'RUNNING'] } },
+            select: { id: true, status: true },
+          });
+          if (!candidate) throw targetMissing();
+          const next = candidate.status === 'QUEUED' ? 'CANCELLED' : 'CANCEL_REQUESTED';
+          const updated = await transaction.promptGenerationJob.updateMany({
+            where: { id: candidate.id, ownerId: owner.id, status: candidate.status },
+            data: {
+              status: next,
+              ...(next === 'CANCELLED' ? { finishedAt: new Date() } : {}),
+            },
+          });
+          if (updated.count !== 1) throw targetMissing();
+          await transaction.auditEvent.create({
+            data: {
+              actorId: owner.id,
+              action: 'prompt_job.cancelled',
+              entityType: 'PromptGenerationJob',
+              entityId: candidate.id,
+              metadata: { state: next },
+            },
+          });
+          const job = await transaction.promptGenerationJob.findFirst({
+            where: { id: candidate.id, ownerId: owner.id },
+          });
+          if (!job) throw targetMissing();
+          return publicJob(job);
         },
+      );
+      const current = await this.prisma.promptGenerationJob.findFirst({
+        where: { id: outcome.result.id, ownerId: owner.id },
       });
-      if (updated.count !== 1) return null;
-      await transaction.auditEvent.create({
-        data: {
-          actorId: (
-            await transaction.user.findUniqueOrThrow({
-              where: { auth0Sub: actor.sub },
-              select: { id: true },
-            })
-          ).id,
-          action: 'prompt_job.cancelled',
-          entityType: 'PromptGenerationJob',
-          entityId: candidate.id,
-          metadata: { state: next },
-        },
-      });
-      const job = await transaction.promptGenerationJob.findFirst({
-        where: { id: candidate.id, owner: { auth0Sub: actor.sub } },
-      });
-      return job ? publicJob(job) : null;
-    });
+      return current ? publicJob(current) : null;
+    } catch (error) {
+      if (error instanceof PromptTargetMissingError) return null;
+      throw error;
+    }
   }
 
   async findOpenCreditReservationOwned(actor: Auth0User, jobId: string): Promise<string | null> {
@@ -549,8 +573,10 @@ function entityId(value: unknown): string | undefined {
 function isUniqueConstraint(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
-function targetMissing(): Error {
-  return new Error('PROMPT_SCOPE_NOT_FOUND');
+class PromptTargetMissingError extends Error {}
+
+function targetMissing(): PromptTargetMissingError {
+  return new PromptTargetMissingError('PROMPT_SCOPE_NOT_FOUND');
 }
 function safeCode(value: string): string {
   return /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : 'INTERNAL';

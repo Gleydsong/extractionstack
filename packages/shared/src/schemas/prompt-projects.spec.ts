@@ -32,6 +32,18 @@ describe('prompt project command contracts', () => {
     expect(() =>
       PromptGenerationRequestSchema.parse({ ...execution, maximumCostMinor: '1.5' }),
     ).toThrow();
+    expect(
+      PromptGenerationRequestSchema.parse({
+        ...execution,
+        maximumCostMinor: '1000000000000',
+      }).maximumCostMinor,
+    ).toBe('1000000000000');
+    expect(() =>
+      PromptGenerationRequestSchema.parse({
+        ...execution,
+        maximumCostMinor: '1000000000001',
+      }),
+    ).toThrow();
   });
 
   it('binds adaptation and preview commands to natural-language public inputs', () => {

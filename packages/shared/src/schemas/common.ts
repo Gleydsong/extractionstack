@@ -24,30 +24,35 @@ export const EvidenceSchema = z.object({
 });
 export type Evidence = z.infer<typeof EvidenceSchema>;
 
-export const ErrorResponseSchema = z.object({
-  code: z.enum([
-    'VALIDATION',
-    'UNAUTHENTICATED',
-    'FORBIDDEN',
-    'NOT_FOUND',
-    'CRAWLER_TIMEOUT',
-    'CRAWLER_TARGET',
-    'RATE_LIMITED',
-    'CONFLICT',
-    'PAYLOAD_TOO_LARGE',
-    'URL_NOT_ALLOWED',
-    'QUEUE_UNAVAILABLE',
-    'INTERNAL',
-    'CRAWLER_LIMIT',
-  ]),
-  message: z.string(),
-  requestId: z.string().uuid().optional(),
-  hint: z.string().optional(),
-  fields: z
-    .array(z.object({ path: z.string(), message: z.string() }))
-    .optional(),
-  targetStatus: z.number().int().optional(),
-  targetUrl: z.string().url().optional(),
-}).strict();
+export const ErrorResponseSchema = z
+  .object({
+    code: z.enum([
+      'VALIDATION',
+      'UNAUTHENTICATED',
+      'FORBIDDEN',
+      'NOT_FOUND',
+      'CRAWLER_TIMEOUT',
+      'CRAWLER_TARGET',
+      'RATE_LIMITED',
+      'CONFLICT',
+      'PAYLOAD_TOO_LARGE',
+      'URL_NOT_ALLOWED',
+      'QUEUE_UNAVAILABLE',
+      'COST_CONSENT_REQUIRED',
+      'PROVIDER_UNAVAILABLE',
+      'MODEL_UNAVAILABLE',
+      'INSUFFICIENT_CREDITS',
+      'COST_LIMIT_EXCEEDED',
+      'INTERNAL',
+      'CRAWLER_LIMIT',
+    ]),
+    message: z.string(),
+    requestId: z.string().uuid().optional(),
+    hint: z.string().optional(),
+    fields: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
+    targetStatus: z.number().int().optional(),
+    targetUrl: z.string().url().optional(),
+  })
+  .strict();
 
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;

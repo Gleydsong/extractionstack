@@ -32,9 +32,12 @@ const PromptDestinationSchema = z.enum([
   'bolt',
 ]);
 
+export const MAXIMUM_COST_MINOR = 1_000_000_000_000n;
+
 const MaximumCostMinorSchema = z
   .string()
   .regex(/^[1-9][0-9]{0,12}$/)
+  .refine((value) => BigInt(value) <= MAXIMUM_COST_MINOR, 'maximum cost exceeds the limit')
   .nullable();
 
 const PromptExecutionRequestObjectSchema = z

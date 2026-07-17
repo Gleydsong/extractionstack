@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import { ProviderFailure } from '@extractionstack/llm-core';
 import type {
   Auth0User,
   PromptGenerationJob,
@@ -84,7 +85,7 @@ function setup() {
       .fn()
       .mockResolvedValue({ result: job, ownerId: 'cm1234567890owner', created: true }),
     findJobOwned: vi.fn().mockResolvedValue(job),
-    failJob: vi.fn().mockResolvedValue(undefined),
+    failJob: vi.fn().mockResolvedValue(job),
     requestCancellation: vi.fn().mockResolvedValue(job),
     findOpenCreditReservationOwned: vi.fn().mockResolvedValue(null),
   };
@@ -107,6 +108,7 @@ function setup() {
     repository,
     queue,
     credits,
+    registry,
   };
 }
 
@@ -149,7 +151,12 @@ describe('PromptProjectsService', () => {
         { ...paidRequest, acceptPlatformCharge: false },
         'preview:key',
       ),
-    ).rejects.toThrow('COST_CONSENT_REQUIRED');
+    ).rejects.toMatchObject({
+      response: {
+        code: 'COST_CONSENT_REQUIRED',
+        message: 'Confirm the maximum platform credit charge before continuing.',
+      },
+    });
     expect(repository.createJob).not.toHaveBeenCalled();
   });
 
@@ -212,6 +219,26 @@ describe('PromptProjectsService', () => {
       }),
     );
   });
+
+  it.each(['RUNNING', 'SUCCEEDED'] as const)(
+    'preserves the reservation when queue add rejects after the job became %s',
+    async (status) => {
+      const { service, repository, queue, credits } = setup();
+      vi.mocked(queue.enqueue).mockRejectedValue(new Error('ambiguous queue result'));
+      vi.mocked(repository.failJob).mockResolvedValue(null);
+      vi.mocked(repository.findJobOwned).mockResolvedValue({
+        ...job,
+        status,
+        message: status === 'RUNNING' ? 'Running' : 'Completed',
+        ...(status === 'SUCCEEDED' ? { finishedAt: now } : {}),
+      });
+
+      await expect(
+        service.generate(actor, projectId, paidRequest, `generation:${status}`),
+      ).resolves.toMatchObject({ status });
+      expect(credits.reverse).not.toHaveBeenCalled();
+    },
+  );
 
   it('reconciles an open reservation when queue-failure reversal is replayed', async () => {
     const { service, repository, queue, credits } = setup();
@@ -280,6 +307,67 @@ describe('PromptProjectsService', () => {
     await service.cancel(actor, job.id, 'cancel:key');
     expect(repository.requestCancellation).toHaveBeenCalledWith(actor, job.id, 'cancel:key');
     expect(queue.cancel).toHaveBeenCalledWith(job.id);
+  });
+
+  it('replays durable cancellation while reconciling external effects without a second transition', async () => {
+    const { service, repository, queue, credits } = setup();
+    const cancelled = {
+      ...job,
+      status: 'CANCELLED' as const,
+      finishedAt: now,
+      message: 'Cancelled',
+    };
+    vi.mocked(repository.requestCancellation).mockResolvedValue(cancelled);
+    vi.mocked(repository.findOpenCreditReservationOwned)
+      .mockResolvedValueOnce('cm1234567890reservation')
+      .mockResolvedValueOnce(null);
+
+    await service.cancel(actor, job.id, 'cancel:durable');
+    vi.mocked(repository.findJobOwned).mockResolvedValue(cancelled);
+    await service.cancel(actor, job.id, 'cancel:durable');
+
+    expect(repository.requestCancellation).toHaveBeenCalledTimes(2);
+    expect(queue.cancel).toHaveBeenCalledTimes(2);
+    expect(credits.reverse).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps model, provider, and credit failures to allowed actionable public errors', async () => {
+    const modelCase = setup();
+    modelCase.registry.assertModel.mockImplementation(() => {
+      throw new ProviderFailure('MODEL_UNAVAILABLE');
+    });
+    await expect(
+      modelCase.service.generate(actor, projectId, paidRequest, 'generation:model-error'),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'MODEL_UNAVAILABLE',
+        message: 'The selected model is unavailable. Choose a configured model and try again.',
+      },
+    });
+
+    const providerCase = setup();
+    providerCase.registry.get.mockImplementation(() => {
+      throw new ProviderFailure('PROVIDER_NOT_CONFIGURED');
+    });
+    await expect(
+      providerCase.service.generate(actor, projectId, paidRequest, 'generation:provider-error'),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'PROVIDER_UNAVAILABLE',
+        message: 'The selected provider is currently unavailable. Try again later.',
+      },
+    });
+
+    const creditsCase = setup();
+    creditsCase.credits.reserve.mockRejectedValue(new Error('INSUFFICIENT_CREDITS'));
+    await expect(
+      creditsCase.service.generate(actor, projectId, paidRequest, 'generation:credits-error'),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'INSUFFICIENT_CREDITS',
+        message: 'There are not enough platform credits for this request.',
+      },
+    });
   });
 
   it('reverses a queued platform-credit reservation and retries reconciliation idempotently', async () => {

@@ -30,6 +30,19 @@ describe('ExtractRequestSchema', () => {
 });
 
 describe('ErrorResponseSchema', () => {
+  it.each([
+    'COST_CONSENT_REQUIRED',
+    'PROVIDER_UNAVAILABLE',
+    'MODEL_UNAVAILABLE',
+    'INSUFFICIENT_CREDITS',
+    'COST_LIMIT_EXCEEDED',
+  ])('accepts the prompt API public error code %s', (code) => {
+    expect(
+      ErrorResponseSchema.safeParse({ code, message: 'Actionable natural-language message' })
+        .success,
+    ).toBe(true);
+  });
+
   it('validates the canonical error shape', () => {
     const r = ErrorResponseSchema.safeParse({
       code: 'CRAWLER_TIMEOUT',

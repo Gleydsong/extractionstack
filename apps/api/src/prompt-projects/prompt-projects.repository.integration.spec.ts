@@ -220,6 +220,58 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
     expect(await prisma.creditLedgerEntry.count({ where: { jobId: jobs[0]!.id } })).toBe(2);
   });
 
+  it('preserves an open reservation when queue add rejects after a worker claimed the job', async () => {
+    const owner = actor('queue-claim-race');
+    const extractionId = await createExtraction(prisma, owner);
+    const project = (await repository.createProject(
+      owner,
+      wizard(extractionId),
+      'project:queue-claim-race',
+    ))!.result;
+    const ownerRow = await prisma.user.findUniqueOrThrow({ where: { auth0Sub: owner.sub } });
+    await prisma.creditLedgerEntry.create({
+      data: {
+        ownerId: ownerRow.id,
+        kind: 'GRANT',
+        amountMinor: 500n,
+        currency: 'CREDITS',
+        idempotencyKey: `grant:${randomUUID()}`,
+      },
+    });
+    const queue = {
+      enqueue: vi.fn(async (jobId: string) => {
+        await prisma.promptGenerationJob.updateMany({
+          where: { id: jobId, status: 'QUEUED' },
+          data: { status: 'RUNNING', startedAt: new Date() },
+        });
+        throw new Error('ambiguous queue add result');
+      }),
+      cancel: vi.fn(),
+    };
+    const service = new PromptProjectsService(
+      repository,
+      queue,
+      registry(),
+      new CreditsService(new CreditsRepository(prisma)),
+    );
+
+    const result = await service.generate(
+      owner,
+      project.id,
+      paidRequest(),
+      'generation:queue-claim-race',
+    );
+    expect(result.status).toBe('RUNNING');
+    expect(
+      await prisma.creditLedgerEntry.count({
+        where: { jobId: result.id, kind: 'RESERVATION', settlement: null },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.creditLedgerEntry.count({ where: { jobId: result.id, kind: 'REVERSAL' } }),
+    ).toBe(0);
+  });
+
   it('reverses a queued credit reservation exactly once when cancellation removes the transport job', async () => {
     const owner = actor('credits-cancel');
     const extractionId = await createExtraction(prisma, owner);
@@ -259,6 +311,24 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
     });
     expect(
       await prisma.creditLedgerEntry.count({ where: { jobId: queued.id, kind: 'REVERSAL' } }),
+    ).toBe(1);
+    expect(
+      await prisma.auditEvent.count({
+        where: { entityId: queued.id, action: 'prompt_job.cancelled' },
+      }),
+    ).toBe(1);
+
+    const second = await service.generate(owner, project.id, paidRequest(), 'generation:cancel-2');
+    await expect(service.cancel(owner, second.id, 'cancel:queued')).rejects.toMatchObject({
+      status: 409,
+    });
+    await expect(repository.findJobOwned(owner, second.id)).resolves.toMatchObject({
+      status: 'QUEUED',
+    });
+    expect(
+      await prisma.mutationIdempotency.count({
+        where: { ownerId: ownerRow.id, operation: 'prompt-job.cancel' },
+      }),
     ).toBe(1);
   });
 });
