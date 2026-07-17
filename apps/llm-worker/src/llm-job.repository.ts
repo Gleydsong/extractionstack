@@ -65,10 +65,15 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
     const staleBefore = new Date(now.getTime() - STALE_RUNNING_MS);
     await this.recoverCompletedSnapshot(
       jobId,
-      staleBefore,
+      new Date(now.getTime() + 1_000),
       'automatic stale completed snapshot recovery',
     );
     await this.reconcileUnclaimableStaleJob(jobId, staleBefore, now);
+    const pending = await this.prisma.promptGenerationJob.findFirst({
+      where: { id: jobId, status: 'RUNNING', providerStage: 'STARTED' },
+      select: { id: true },
+    });
+    if (pending) throw new Error('LLM_RECOVERY_PENDING');
     const leaseToken = randomUUID();
     const rows = await this.prisma.$queryRaw<
       Array<{
@@ -542,6 +547,49 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
     return this.reconcileWithSettlement(jobId, actualAmountMinor, reason);
   }
 
+  async sweepRecoverable(
+    batchSize = 50,
+  ): Promise<Readonly<{ completed: number; ambiguous: number }>> {
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 100)
+      throw new Error('SWEEP_BATCH_INVALID');
+    const staleBefore = new Date(Date.now() - STALE_RUNNING_MS);
+    const rows = await this.prisma.$transaction(
+      (transaction) =>
+        transaction.$queryRaw<Array<{ id: string; providerStage: 'STARTED' | 'COMPLETED' }>>`
+        SELECT "id", "providerStage"::text AS "providerStage"
+        FROM "PromptGenerationJob"
+        WHERE "status" = 'RUNNING'::"PromptJobStatus"
+          AND (
+            "providerStage" = 'COMPLETED'::"ProviderExecutionStage"
+            OR ("providerStage" = 'STARTED'::"ProviderExecutionStage"
+                AND COALESCE("heartbeatAt", "startedAt") < ${staleBefore})
+          )
+          AND pg_try_advisory_xact_lock(hashtextextended("id", 17))
+        ORDER BY "updatedAt" ASC
+        LIMIT ${batchSize}
+        FOR UPDATE SKIP LOCKED
+      `,
+    );
+    let completed = 0;
+    let ambiguous = 0;
+    for (const row of rows) {
+      if (row.providerStage === 'COMPLETED') {
+        if (
+          await this.recoverCompletedSnapshot(
+            row.id,
+            new Date(Date.now() + 1_000),
+            'periodic completed snapshot recovery',
+          )
+        )
+          completed += 1;
+      } else {
+        await this.reconcileUnclaimableStaleJob(row.id, staleBefore, new Date());
+        ambiguous += 1;
+      }
+    }
+    return Object.freeze({ completed, ambiguous });
+  }
+
   private async recoverCompletedSnapshot(
     jobId: string,
     staleBefore: Date,
@@ -568,7 +616,10 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
       await this.markAmbiguous(claimed, 'PROVIDER_SNAPSHOT_INVALID');
       return false;
     }
-    const completed = await this.complete(command);
+    const completed = await this.complete(command).catch((error: unknown) => {
+      if (isConcurrentCompletionRace(error)) return false;
+      throw error;
+    });
     if (completed) {
       await this.prisma.promptGenerationJob.updateMany({
         where: { id: jobId, status: 'SUCCEEDED' },
@@ -598,12 +649,20 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
         const actual = actualAmountMinor ?? 0n;
         if (actual > reservationMaximum(reservation.metadata))
           throw new Error('CREDIT_COST_LIMIT_EXCEEDED');
+        const kind =
+          actualAmountMinor === null
+            ? 'REVERSAL'
+            : actual === reserved
+              ? 'CONFIRMATION'
+              : 'ADJUSTMENT';
+        const delta = reserved - actual;
+        if (kind === 'ADJUSTMENT' && delta === 0n) throw new Error('ADJUSTMENT_AMOUNT_INVALID');
         await transaction.creditLedgerEntry.create({
           data: {
             ownerId: reservation.ownerId,
             jobId,
-            kind: actualAmountMinor === null ? 'REVERSAL' : 'ADJUSTMENT',
-            amountMinor: reserved - actual,
+            kind,
+            amountMinor: delta,
             currency: reservation.currency,
             idempotencyKey: `reconcile:${reservation.id}`,
             reservationId: reservation.id,
@@ -625,6 +684,11 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
       return updated.count === 1;
     });
   }
+}
+
+function isConcurrentCompletionRace(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false;
+  return error.code === 'P2002' || error.code === 'P2034';
 }
 
 function claimedJob(row: {

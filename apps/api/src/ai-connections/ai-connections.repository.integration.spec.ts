@@ -26,11 +26,9 @@ describePostgres('AiConnectionsRepository PostgreSQL integration', () => {
   const vault = new CredentialVault(Buffer.alloc(32, 19).toString('base64'), 'integration-v1');
 
   beforeEach(async () => {
-    await prisma.auditEvent.deleteMany();
-    await prisma.mutationIdempotency.deleteMany();
-    await prisma.providerCredential.deleteMany();
-    await prisma.aiConnection.deleteMany();
-    await prisma.user.deleteMany();
+    await prisma.user.deleteMany({
+      where: { auth0Sub: { in: [actor.sub, otherActor.sub] } },
+    });
   });
 
   afterAll(async () => {
@@ -52,11 +50,19 @@ describePostgres('AiConnectionsRepository PostgreSQL integration', () => {
     );
 
     expect(replay).toEqual(first);
-    expect(await prisma.aiConnection.count()).toBe(1);
     expect(
-      await prisma.auditEvent.count({ where: { action: 'ai_connection.api_key_created' } }),
+      await prisma.aiConnection.count({ where: { owner: { auth0Sub: actor.sub } } }),
     ).toBe(1);
-    expect(await prisma.mutationIdempotency.findFirst()).toMatchObject({
+    expect(
+      await prisma.auditEvent.count({
+        where: { action: 'ai_connection.api_key_created', actor: { auth0Sub: actor.sub } },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.mutationIdempotency.findFirst({
+        where: { operation: 'add-api-key', owner: { auth0Sub: actor.sub } },
+      }),
+    ).toMatchObject({
       operation: 'add-api-key',
       status: 'COMPLETE',
       entityId: first.id,
@@ -94,10 +100,18 @@ describePostgres('AiConnectionsRepository PostgreSQL integration', () => {
 
     expect(left.result).toEqual(right.result);
     expect([left.replayed, right.replayed].sort()).toEqual([false, true]);
-    expect(await prisma.aiConnection.count()).toBe(1);
-    expect(await prisma.providerCredential.count()).toBe(1);
-    expect(await prisma.auditEvent.count()).toBe(1);
-    expect(await prisma.mutationIdempotency.count()).toBe(1);
+    expect(
+      await prisma.aiConnection.count({ where: { owner: { auth0Sub: actor.sub } } }),
+    ).toBe(1);
+    expect(
+      await prisma.providerCredential.count({
+        where: { connection: { owner: { auth0Sub: actor.sub } } },
+      }),
+    ).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { actor: { auth0Sub: actor.sub } } })).toBe(1);
+    expect(
+      await prisma.mutationIdempotency.count({ where: { owner: { auth0Sub: actor.sub } } }),
+    ).toBe(1);
   });
 
   it('keeps validation and revocation atomic and never writes an audit for a failed state transition', async () => {
@@ -139,7 +153,10 @@ describePostgres('AiConnectionsRepository PostgreSQL integration', () => {
         where: { action: 'ai_connection.revoked', entityId: created.id },
       }),
     ).toBe(1);
-    expect((await prisma.providerCredential.findFirstOrThrow()).deletedAt).not.toBeNull();
+    expect(
+      (await prisma.providerCredential.findFirstOrThrow({ where: { connectionId: created.id } }))
+        .deletedAt,
+    ).not.toBeNull();
 
     const replay = await repository.revokeOwned(
       actor,

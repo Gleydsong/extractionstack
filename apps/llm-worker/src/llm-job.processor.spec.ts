@@ -129,22 +129,60 @@ describe('LlmJobProcessor', () => {
   });
 
   it('uses the database attempt, not the transport attempt, for retry authority', async () => {
-    const { processor, store, provider, claimed } = setup({ attempts: 2, maxAttempts: 2 });
-    provider.generatePrompt.mockRejectedValue(new ProviderFailure('TIMEOUT', { retryable: true }));
+    const { processor, store, dependencies, claimed } = setup({ attempts: 2, maxAttempts: 2 });
+    dependencies.credentials.resolve.mockRejectedValue(
+      new ProviderFailure('TIMEOUT', { retryable: true }),
+    );
     await processor.process('job-1', 1, 10);
     expect(store.deadLetter).toHaveBeenCalledWith(claimed, 'TIMEOUT');
     expect(store.markRetry).not.toHaveBeenCalled();
   });
 
-  it('retries a transient pre-provider failure only after a fenced transition', async () => {
+  it('holds a transient provider failure ambiguous after STARTED', async () => {
     const { processor, store, provider, claimed } = setup();
     provider.generatePrompt.mockRejectedValue(
       new ProviderFailure('PROVIDER_UNAVAILABLE', { retryable: true }),
     );
-    await expect(processor.process('job-1', 9, 10)).rejects.toMatchObject({
+    await processor.process('job-1', 9, 10);
+    expect(store.markAmbiguous).toHaveBeenCalledWith(claimed, 'PROVIDER_OUTCOME_UNKNOWN');
+    expect(store.markRetry).not.toHaveBeenCalled();
+  });
+
+  it('retries only a proven failure before provider STARTED', async () => {
+    const { processor, store, dependencies, claimed } = setup();
+    dependencies.credentials.resolve.mockRejectedValue(
+      new ProviderFailure('PROVIDER_UNAVAILABLE', { retryable: true }),
+    );
+    await expect(processor.process('job-1', 1, 10)).rejects.toMatchObject({
       code: 'PROVIDER_UNAVAILABLE',
     });
     expect(store.markRetry).toHaveBeenCalledWith(claimed, 'PROVIDER_UNAVAILABLE');
+    expect(store.markProviderStarted).not.toHaveBeenCalled();
+  });
+
+  it('never retries when persistence of provider STARTED has an unknown outcome', async () => {
+    const { processor, store, claimed } = setup();
+    store.markProviderStarted.mockRejectedValue(new Error('connection lost after commit'));
+    await expect(processor.process('job-1', 1, 10)).resolves.toBeUndefined();
+    expect(store.markAmbiguous).toHaveBeenCalledWith(claimed, 'PROVIDER_OUTCOME_UNKNOWN');
+    expect(store.markRetry).not.toHaveBeenCalled();
+  });
+
+  it('quotes and requests the same output allowance inside the context window', async () => {
+    const state = setup();
+    state.provider.getCapabilities.mockReturnValue({
+      maxOutputTokens: 1_000,
+      contextWindowTokens: 3_000,
+    });
+    const quote = vi.spyOn(state.dependencies.pricing, 'quoteMaximum');
+    await state.processor.process('job-1', 1, 10);
+    expect(quote).toHaveBeenCalledOnce();
+    const allowedOutputTokens = quote.mock.calls[0]![3];
+    expect(allowedOutputTokens).toBeGreaterThan(0);
+    expect(allowedOutputTokens).toBeLessThanOrEqual(1_000);
+    expect(state.provider.generatePrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ maxOutputTokens: allowedOutputTokens }),
+    );
   });
 
   it('rejects missing platform pricing before provider execution', async () => {
@@ -249,7 +287,10 @@ describe('LlmJobProcessor', () => {
     });
     await state.processor.process('job-1', 1, 10);
     expect(state.store.markProviderCompleted).not.toHaveBeenCalled();
-    expect(state.store.markAmbiguous).toHaveBeenCalledWith(state.claimed, 'PERSISTENCE_FAILED');
+    expect(state.store.markAmbiguous).toHaveBeenCalledWith(
+      state.claimed,
+      'PROVIDER_OUTCOME_UNKNOWN',
+    );
   });
 
   it('fails closed on heartbeat rejection without an unhandled retry', async () => {

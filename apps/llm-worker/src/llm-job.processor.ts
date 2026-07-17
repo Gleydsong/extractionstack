@@ -48,7 +48,7 @@ export class LlmJobProcessor {
     const job = await this.dependencies.store.claim(jobId);
     if (!job) return;
     let context: AuthorizedLlmContext | null = null;
-    let providerReturned = false;
+    let providerStartAttempted = false;
 
     try {
       context = await this.dependencies.store.loadAuthorizedContext(job);
@@ -88,19 +88,23 @@ export class LlmJobProcessor {
       const adapter = this.dependencies.providers.get(job.provider);
       const capabilities = adapter.getCapabilities();
       const composedLayers = layers(composed);
+      const maximumInputTokens = conservativeInputTokenUpperBound(composedLayers);
+      const allowedOutputTokens = Math.min(
+        capabilities.maxOutputTokens,
+        capabilities.contextWindowTokens - maximumInputTokens,
+      );
+      if (allowedOutputTokens <= 0) {
+        await this.dependencies.store.fail(job, 'INPUT_CONTEXT_LIMIT_EXCEEDED');
+        return;
+      }
       if (job.credentialMode === 'PLATFORM_CREDITS') {
-        const maximumInputTokens = conservativeInputTokenUpperBound(composedLayers);
-        if (maximumInputTokens > capabilities.contextWindowTokens) {
-          await this.dependencies.store.fail(job, 'INPUT_CONTEXT_LIMIT_EXCEEDED');
-          return;
-        }
         let maximumCost;
         try {
           maximumCost = this.dependencies.pricing.quoteMaximum(
             job.provider,
             job.model,
             maximumInputTokens,
-            capabilities.maxOutputTokens,
+            allowedOutputTokens,
           );
         } catch {
           await this.dependencies.store.fail(job, 'PRICING_NOT_CONFIGURED');
@@ -130,10 +134,11 @@ export class LlmJobProcessor {
         wizardInput: context.wizard,
         sourcePrompt: context.sourcePrompt,
         layers: composedLayers,
-        maxOutputTokens: capabilities.maxOutputTokens,
+        maxOutputTokens: allowedOutputTokens,
         signal: abortController.signal,
       });
 
+      providerStartAttempted = true;
       if (!(await this.dependencies.store.markProviderStarted(job))) return;
       const startedAt = this.now();
       const result = await this.invokeWithCancellation(job, abortController, () =>
@@ -141,13 +146,8 @@ export class LlmJobProcessor {
           ? adapter.generatePreview({ generation, preview: previewInput(context!) })
           : adapter.generatePrompt(generation),
       );
-      providerReturned = true;
       const latencyMs = Math.max(0, this.now() - startedAt);
-      assertUsageBounds(
-        result.usage,
-        capabilities.contextWindowTokens,
-        capabilities.maxOutputTokens,
-      );
+      assertUsageBounds(result.usage, capabilities.contextWindowTokens, allowedOutputTokens);
 
       if (await this.dependencies.store.isCancellationRequested(job)) {
         await this.dependencies.store.markAmbiguous(job, 'PROVIDER_OUTCOME_UNKNOWN');
@@ -203,8 +203,10 @@ export class LlmJobProcessor {
         return;
       }
       const failure = sanitizedFailure(cause);
-      if (providerReturned) {
-        await this.dependencies.store.markAmbiguous(job, 'PERSISTENCE_FAILED').catch(() => false);
+      if (providerStartAttempted) {
+        await this.dependencies.store
+          .markAmbiguous(job, 'PROVIDER_OUTCOME_UNKNOWN')
+          .catch(() => false);
         return;
       }
       if (failure.code === 'REQUEST_CANCELLED' && context) {

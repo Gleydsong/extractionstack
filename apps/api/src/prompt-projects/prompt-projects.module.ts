@@ -16,6 +16,8 @@ import {
   PromptVersionsController,
 } from './prompt-projects.controller.js';
 import { PromptProjectsRepository } from './prompt-projects.repository.js';
+import { LlmReconciliationController } from './llm-reconciliation.controller.js';
+import { LlmReconciliationService } from './llm-reconciliation.service.js';
 import {
   PROMPT_GENERATION_QUEUE,
   PROMPT_PROJECTS_REPOSITORY,
@@ -24,10 +26,16 @@ import {
 
 @Module({
   imports: [PrismaModule, AiConnectionsModule, CreditsModule],
-  controllers: [PromptProjectsController, PromptVersionsController, PromptJobsController],
+  controllers: [
+    PromptProjectsController,
+    PromptVersionsController,
+    PromptJobsController,
+    LlmReconciliationController,
+  ],
   providers: [
     PromptProjectsRepository,
     PromptProjectsService,
+    LlmReconciliationService,
     BullMqPromptGenerationQueue,
     {
       provide: LLM_BULL_QUEUE,

@@ -250,6 +250,110 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
       reconciliationReason: 'operator replayed normalized snapshot',
     });
   });
+
+  it('reconciles a known snapshot safely under concurrent operator commands', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    const command = completion(claimed!, 'concurrent-known-request', 2n);
+    await repository.markProviderStarted(claimed!);
+    await repository.markProviderCompleted(command);
+    await repository.markAmbiguous(claimed!, 'PERSISTENCE_FAILED');
+
+    const results = await Promise.all([
+      repository.reconcileKnownSnapshot(fixture.jobId, 'operator command A'),
+      repository.reconcileKnownSnapshot(fixture.jobId, 'operator command B'),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(
+      await prisma.creditLedgerEntry.count({
+        where: { jobId: fixture.jobId, kind: 'CONFIRMATION' },
+      }),
+    ).toBe(1);
+    expect(await prisma.llmUsage.count({ where: { jobId: fixture.jobId } })).toBe(1);
+  });
+
+  it('uses zero-delta CONFIRMATION when actual cost equals the reservation', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.markProviderStarted(claimed!);
+    await repository.markAmbiguous(claimed!, 'PROVIDER_OUTCOME_UNKNOWN');
+    await expect(
+      repository.reconcileUnknownPaid(fixture.jobId, 100n, 'invoice equals reserve'),
+    ).resolves.toBe(true);
+    const confirmation = await prisma.creditLedgerEntry.findFirstOrThrow({
+      where: { jobId: fixture.jobId, kind: 'CONFIRMATION' },
+    });
+    expect(confirmation.amountMinor).toBe(0n);
+    expect(
+      await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId, kind: 'ADJUSTMENT' } }),
+    ).toBe(0);
+  });
+
+  it('rejects actual cost above the accepted maximum and keeps the reservation open', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.markProviderStarted(claimed!);
+    await repository.markAmbiguous(claimed!, 'PROVIDER_OUTCOME_UNKNOWN');
+    await expect(
+      repository.reconcileUnknownPaid(fixture.jobId, 101n, 'invoice above accepted maximum'),
+    ).rejects.toThrow('CREDIT_COST_LIMIT_EXCEEDED');
+    expect(await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId } })).toBe(1);
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({ status: 'AMBIGUOUS' });
+  });
+
+  it('keeps a post-STARTED provider failure ambiguous with no second claim', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.markProviderStarted(claimed!);
+    await repository.markAmbiguous(claimed!, 'PROVIDER_OUTCOME_UNKNOWN');
+    await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
+    expect(await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId } })).toBe(1);
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({ status: 'AMBIGUOUS', providerStage: 'STARTED' });
+  });
+
+  it('sweeper finalizes COMPLETED without a future queue delivery', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    const command = completion(claimed!, 'swept-request', 2n);
+    await repository.markProviderStarted(claimed!);
+    await repository.markProviderCompleted(command);
+    await expect(repository.sweepRecoverable()).resolves.toMatchObject({ completed: 1 });
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({ status: 'SUCCEEDED' });
+  });
+
+  it('does not acknowledge a fresh STARTED recovery as successful delivery', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.markProviderStarted(claimed!);
+    await expect(repository.claim(fixture.jobId)).rejects.toThrow('LLM_RECOVERY_PENDING');
+    expect(await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId } })).toBe(1);
+  });
+
+  it('database rejects invalid provider stage timestamp and snapshot shapes', async () => {
+    const fixture = await createFixture(prisma, false);
+    await expect(
+      prisma.promptGenerationJob.update({
+        where: { id: fixture.jobId },
+        data: { providerStage: 'STARTED' },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.promptGenerationJob.update({
+        where: { id: fixture.jobId },
+        data: {
+          providerStage: 'COMPLETED',
+          providerStartedAt: new Date(),
+          providerCompletedAt: new Date(),
+        },
+      }),
+    ).rejects.toThrow();
+  });
 });
 
 function completion(
