@@ -469,6 +469,83 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     expect(await prisma.promptVersion.count({ where: { projectId: fixture.projectId } })).toBe(0);
   });
 
+  it('isolates one permanent COMPLETED failure and finalizes the next job in the same batch', async () => {
+    const invalid = await createFixture(prisma, true);
+    const valid = await createFixture(prisma, true);
+    const invalidClaim = await repository.claim(invalid.jobId);
+    const validClaim = await repository.claim(valid.jobId);
+    await repository.markProviderStarted(invalidClaim!);
+    await repository.markProviderCompleted(
+      completion(invalidClaim!, 'invalid-financial-request', 101n),
+    );
+    await repository.markProviderStarted(validClaim!);
+    await repository.markProviderCompleted(completion(validClaim!, 'valid-request', 2n));
+    await prisma.promptGenerationJob.update({
+      where: { id: invalid.jobId },
+      data: { updatedAt: new Date(Date.now() - 60_000) },
+    });
+
+    const result = await repository.sweepRecoverable();
+
+    expect(result).toMatchObject({ completed: 1, ambiguous: 1, failed: 0, requeued: 0 });
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: invalid.jobId } }),
+    ).resolves.toMatchObject({
+      status: 'AMBIGUOUS',
+      providerStage: 'COMPLETED',
+      errorCode: 'RECOVERY_COMPLETION_INVALID',
+      recoveryLeaseToken: null,
+      reconciliationCommandId: null,
+    });
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: valid.jobId } }),
+    ).resolves.toMatchObject({ status: 'SUCCEEDED' });
+    expect(await prisma.creditLedgerEntry.count({ where: { jobId: invalid.jobId } })).toBe(1);
+    expect(
+      await prisma.auditEvent.count({
+        where: { entityId: invalid.jobId, action: 'llm_job.recovery_failed' },
+      }),
+    ).toBe(1);
+  });
+
+  it('releases a transient COMPLETED lease without false counts and continues the batch', async () => {
+    const transient = await createFixture(prisma, false);
+    const valid = await createFixture(prisma, false);
+    const transientClaim = await repository.claim(transient.jobId);
+    const validClaim = await repository.claim(valid.jobId);
+    await repository.markProviderStarted(transientClaim!);
+    await repository.markProviderCompleted(
+      completion(transientClaim!, 'transient-request', null),
+    );
+    await repository.markProviderStarted(validClaim!);
+    await repository.markProviderCompleted(completion(validClaim!, 'valid-after-transient', null));
+    await prisma.promptGenerationJob.update({
+      where: { id: transient.jobId },
+      data: { updatedAt: new Date(Date.now() - 60_000) },
+    });
+    class TransientRepository extends LlmJobRepository {
+      override complete(
+        command: CompletionCommand,
+        recoveryToken?: string,
+        reconciliationReason?: string,
+      ) {
+        if (command.job.id === transient.jobId)
+          return Promise.reject(Object.assign(new Error('transaction conflict'), { code: 'P2034' }));
+        return super.complete(command, recoveryToken, reconciliationReason);
+      }
+    }
+
+    const result = await new TransientRepository(prisma).sweepRecoverable();
+
+    expect(result).toMatchObject({ completed: 1, ambiguous: 0, failed: 0, requeued: 0 });
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: transient.jobId } }),
+    ).resolves.toMatchObject({ status: 'RUNNING', recoveryLeaseToken: null });
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: valid.jobId } }),
+    ).resolves.toMatchObject({ status: 'SUCCEEDED' });
+  });
+
   it('does not acknowledge a fresh STARTED recovery as successful delivery', async () => {
     const fixture = await createFixture(prisma, true);
     const claimed = await repository.claim(fixture.jobId);

@@ -19,6 +19,11 @@ import type {
   CompletionCommand,
   LlmJobStorePort,
 } from './llm-worker.types';
+import {
+  classifyRecoveryError,
+  PermanentRecoveryError,
+  sanitizedRecoveryCode,
+} from './llm-recovery-error';
 
 const STALE_RUNNING_MS = 5 * 60 * 1_000;
 const RECOVERY_LEASE_MS = 30_000;
@@ -617,7 +622,12 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
         finishedAt: null,
       },
     });
-    return this.recoverCompletedSnapshot(jobId, new Date(Date.now() + 1_000), reason);
+    try {
+      return await this.recoverCompletedSnapshot(jobId, new Date(Date.now() + 1_000), reason);
+    } catch (error) {
+      if (classifyRecoveryError(error) === 'IDEMPOTENT') return false;
+      throw error;
+    }
   }
 
   async reconcileConfirmedNotRun(jobId: string, reason: string): Promise<boolean> {
@@ -702,15 +712,20 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
     const deliveries: Array<Readonly<{ jobId: string; recoveryToken: string }>> = [];
     for (const row of rows) {
       if (row.providerStage === 'COMPLETED') {
-        if (
-          await this.recoverCompletedSnapshot(
-            row.id,
-            new Date(Date.now() + 1_000),
-            'periodic completed snapshot recovery',
-            recoveryToken,
+        try {
+          if (
+            await this.recoverCompletedSnapshot(
+              row.id,
+              new Date(Date.now() + 1_000),
+              'periodic completed snapshot recovery',
+              recoveryToken,
+            )
           )
-        )
-          completed += 1;
+            completed += 1;
+        } catch (error) {
+          if (await this.handleCompletedRecoveryFailure(row.id, recoveryToken, error))
+            ambiguous += 1;
+        }
       } else if (row.providerStage === 'STARTED') {
         if (await this.finalizeStartedRecovery(row.id, recoveryToken)) ambiguous += 1;
       } else if (row.status === 'QUEUED') {
@@ -762,12 +777,17 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
       },
     });
     if (leased.count !== 1) return false;
-    return this.recoverCompletedSnapshot(
-      jobId,
-      new Date(now.getTime() + 1_000),
-      'automatic completed snapshot delivery recovery',
-      recoveryToken,
-    );
+    try {
+      return await this.recoverCompletedSnapshot(
+        jobId,
+        new Date(now.getTime() + 1_000),
+        'automatic completed snapshot delivery recovery',
+        recoveryToken,
+      );
+    } catch (error) {
+      if (await this.handleCompletedRecoveryFailure(jobId, recoveryToken, error)) return false;
+      throw new Error('LLM_RECOVERY_PENDING');
+    }
   }
 
   private async recoverCompletedSnapshot(
@@ -795,37 +815,50 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
     try {
       command = commandFromSnapshot(claimed, row.providerSnapshot);
     } catch {
-      await this.finalizeInvalidSnapshotRecovery(claimed, recoveryToken);
-      return false;
+      throw new PermanentRecoveryError('PROVIDER_SNAPSHOT_INVALID');
     }
-    return this.complete(command, recoveryToken, reason).catch((error: unknown) => {
-      if (isConcurrentCompletionRace(error)) return false;
-      throw error;
-    });
+    return this.complete(command, recoveryToken, reason);
   }
 
-  private async finalizeInvalidSnapshotRecovery(
-    job: ClaimedLlmJob,
-    recoveryToken?: string,
+  private async handleCompletedRecoveryFailure(
+    jobId: string,
+    recoveryToken: string,
+    error: unknown,
+  ): Promise<boolean> {
+    if (classifyRecoveryError(error) === 'PERMANENT')
+      return this.finalizePermanentCompletedRecovery(jobId, recoveryToken, error);
+    await this.prisma.promptGenerationJob.updateMany({
+      where: { id: jobId, recoveryLeaseToken: recoveryToken },
+      data: { recoveryLeaseToken: null, recoveryLeaseExpiresAt: null },
+    });
+    return false;
+  }
+
+  private async finalizePermanentCompletedRecovery(
+    jobId: string,
+    recoveryToken: string,
+    error: unknown,
   ): Promise<boolean> {
     return this.prisma.$transaction(async (transaction) => {
       const current = await transaction.promptGenerationJob.findFirst({
         where: {
-          ...leaseWhere(job, ['RUNNING']),
+          id: jobId,
+          status: 'RUNNING',
           providerStage: 'COMPLETED',
-          ...(recoveryToken ? { recoveryLeaseToken: recoveryToken } : {}),
+          recoveryLeaseToken: recoveryToken,
         },
       });
       if (!current) return false;
       const updated = await transaction.promptGenerationJob.updateMany({
         where: {
-          ...leaseWhere(job, ['RUNNING']),
+          id: jobId,
+          status: 'RUNNING',
           providerStage: 'COMPLETED',
-          ...(recoveryToken ? { recoveryLeaseToken: recoveryToken } : {}),
+          recoveryLeaseToken: recoveryToken,
         },
         data: {
           status: 'AMBIGUOUS',
-          errorCode: 'PROVIDER_SNAPSHOT_INVALID',
+          errorCode: 'RECOVERY_COMPLETION_INVALID',
           errorMessage: null,
           retryable: false,
           finishedAt: new Date(),
@@ -833,12 +866,29 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
           heartbeatAt: null,
           recoveryLeaseToken: null,
           recoveryLeaseExpiresAt: null,
-          reconciliationReason: 'normalized provider snapshot is invalid',
+          reconciliationReason: 'automatic recovery failed; manual reconciliation required',
           reconciledAt: current.reconciliationActorId ? new Date() : null,
+          reconciliationActorId: null,
+          reconciliationCommandId: null,
         },
       });
       if (updated.count !== 1) return false;
-      await this.createFinalRecoveryAudit(transaction, current, 'FAILED');
+      await transaction.auditEvent.create({
+        data: {
+          actorId: current.reconciliationActorId ?? current.ownerId,
+          action: 'llm_job.recovery_failed',
+          entityType: 'PromptGenerationJob',
+          entityId: current.id,
+          metadata: {
+            outcome: 'AMBIGUOUS',
+            reasonCode: sanitizedRecoveryCode(error),
+            actorType: current.reconciliationActorId ? 'ADMIN' : 'SYSTEM',
+            ...(current.reconciliationCommandId
+              ? { commandIdHash: hash(current.reconciliationCommandId) }
+              : {}),
+          },
+        },
+      });
       return true;
     });
   }
@@ -922,11 +972,6 @@ export class LlmJobRepository implements LlmJobStorePort, CredentialStorePort {
       return updated.count === 1;
     });
   }
-}
-
-function isConcurrentCompletionRace(error: unknown): boolean {
-  if (!error || typeof error !== 'object' || !('code' in error)) return false;
-  return error.code === 'P2002' || error.code === 'P2034';
 }
 
 function claimedJob(row: {
