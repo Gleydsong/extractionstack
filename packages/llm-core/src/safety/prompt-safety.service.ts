@@ -39,7 +39,7 @@ const QUOTED_SENSITIVE_HEADER_START =
   /(['"])((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:)\s*/gi;
 const EMBEDDED_SENSITIVE_HEADER =
   /((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:)(?!\s*\[REDACTED\])\s*[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/gi;
-const SOURCE_DELIMITER = /<\/?untrusted_extraction_report\s*>/gi;
+const SOURCE_DELIMITER = /<\/?untrusted_(?:extraction_report|source_prompt)(?:\s+[^>]*)?\s*>/gi;
 const INSTRUCTION_LIKE_CONTENT =
   /\b(?:ignore|disregard|override|forget)\b[^\n.]{0,100}\b(?:instructions?|prompt|policy|rules?)\b|\b(?:system|developer)\s+prompt\b|\bfollow\s+(?:these|my|system)\s+(?:instructions?|prompt)\b/i;
 const ABSOLUTE_HTTP_URL = /^https?:\/\//i;

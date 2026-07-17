@@ -151,6 +151,7 @@ export class GeminiProviderAdapter implements LlmProviderAdapter {
       usage: usage(
         response.data.usageMetadata.promptTokenCount,
         response.data.usageMetadata.totalTokenCount - response.data.usageMetadata.promptTokenCount,
+        { reasoningTokens: response.data.usageMetadata.thoughtsTokenCount },
       ),
     });
   }

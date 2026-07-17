@@ -83,6 +83,8 @@ const RuntimeEnvBaseSchema = z.object({
   LLM_MAX_INPUT_TOKENS: boundedCanonicalInteger(1, 1_000_000, 32_000),
   LLM_MAX_OUTPUT_TOKENS: boundedCanonicalInteger(1, 1_000_000, 4_096),
   LLM_MAX_COST_MINOR_UNITS: boundedCanonicalInteger(0, 1_000_000, 500),
+  LLM_PRICING_VERSION: z.string().trim().min(1).max(64).default('unconfigured-v1'),
+  LLM_PRICING_CATALOG_JSON: z.string().trim().min(2).max(65_536).default('[]'),
 });
 
 export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
@@ -99,6 +101,12 @@ export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
   }
   if (!env.AUTH0_AUDIENCE || /replace-me/i.test(env.AUTH0_AUDIENCE)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'a real AUTH0_AUDIENCE is required' });
+  }
+  if (env.LLM_PRICING_VERSION === 'unconfigured-v1' || env.LLM_PRICING_CATALOG_JSON === '[]') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'an explicit LLM pricing catalog is required',
+    });
   }
   if (!env.LLM_CREDENTIAL_MASTER_KEY) {
     ctx.addIssue({

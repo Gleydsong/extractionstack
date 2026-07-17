@@ -50,6 +50,14 @@ const OpenAiResponseSchema = z
       .object({
         input_tokens: z.number().int().nonnegative(),
         output_tokens: z.number().int().nonnegative(),
+        input_tokens_details: z
+          .object({ cached_tokens: z.number().int().nonnegative() })
+          .passthrough()
+          .optional(),
+        output_tokens_details: z
+          .object({ reasoning_tokens: z.number().int().nonnegative() })
+          .passthrough()
+          .optional(),
       })
       .passthrough(),
   })
@@ -137,7 +145,10 @@ export class OpenAiProviderAdapter implements LlmProviderAdapter {
       content,
       finishReason,
       providerRequestId: headerRequestId ?? safeId(response.data.id),
-      usage: usage(response.data.usage.input_tokens, response.data.usage.output_tokens),
+      usage: usage(response.data.usage.input_tokens, response.data.usage.output_tokens, {
+        cachedInputTokens: response.data.usage.input_tokens_details?.cached_tokens,
+        reasoningTokens: response.data.usage.output_tokens_details?.reasoning_tokens,
+      }),
     });
   }
 

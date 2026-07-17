@@ -123,6 +123,7 @@ export const PromptJobStatusSchema = z.enum([
   'FAILED',
   'CANCEL_REQUESTED',
   'CANCELLED',
+  'AMBIGUOUS',
 ]);
 export type PromptJobStatus = z.infer<typeof PromptJobStatusSchema>;
 
@@ -227,12 +228,20 @@ const CancelledPromptJobSchema = PromptJobBaseSchema.extend({
   message: z.string().trim().min(1).max(1_000),
 }).strict();
 
+const AmbiguousPromptJobSchema = PromptJobBaseSchema.extend({
+  status: z.literal('AMBIGUOUS'),
+  errorCode: z.string().trim().min(1).max(64),
+  message: z.string().trim().min(1).max(1_000),
+  retryable: z.literal(false),
+}).strict();
+
 export const PromptGenerationJobSchema = z
   .discriminatedUnion('status', [
     PendingPromptJobSchema,
     SucceededPromptJobSchema,
     FailedPromptJobSchema,
     CancelledPromptJobSchema,
+    AmbiguousPromptJobSchema,
   ])
   .superRefine(({ provider, credentialMode }, context) => {
     const result = ProviderAuthorizationSchema.safeParse({ provider, credentialMode });

@@ -494,7 +494,7 @@ function publicJob(job: {
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
   };
-  if (job.status === 'FAILED') {
+  if (job.status === 'FAILED' || job.status === 'AMBIGUOUS') {
     return PromptGenerationJobSchema.parse({
       ...base,
       errorCode: job.errorCode ?? 'INTERNAL',

@@ -339,6 +339,15 @@ async function readBoundedBody(
       throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
     }
     return decodedChunks.join('');
+  } catch (error) {
+    try {
+      await reader.cancel();
+    } catch {
+      // Preserve the normalized body failure.
+    }
+    controller.abort();
+    if (error instanceof ProviderFailure) throw error;
+    throw new ProviderFailure('INVALID_RESPONSE', { providerRequestId });
   } finally {
     reader.releaseLock();
   }
@@ -373,12 +382,20 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
-export function usage(inputTokens: number, outputTokens: number): NormalizedUsage {
+export function usage(
+  inputTokens: number,
+  outputTokens: number,
+  details: { cachedInputTokens?: number; reasoningTokens?: number } = {},
+): NormalizedUsage {
   return Object.freeze({
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
     estimatedCostMicros: null,
+    ...(details.cachedInputTokens !== undefined
+      ? { cachedInputTokens: details.cachedInputTokens }
+      : {}),
+    ...(details.reasoningTokens !== undefined ? { reasoningTokens: details.reasoningTokens } : {}),
   });
 }
 

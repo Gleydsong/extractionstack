@@ -3,6 +3,7 @@ import {
   CredentialResolver,
   GeminiProviderAdapter,
   OpenAiProviderAdapter,
+  PricingCatalog,
   PromptComposer,
   PromptSafetyService,
   ProviderFailure,
@@ -40,6 +41,10 @@ const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
       provide: PROVIDERS,
       useFactory: (registry: ProviderRegistry) => createAdapters(registry, process.env),
       inject: [ProviderRegistry],
+    },
+    {
+      provide: PricingCatalog,
+      useFactory: () => createPricingCatalog(process.env),
     },
     {
       provide: CredentialResolver,
@@ -92,6 +97,7 @@ const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
         repository: LlmJobRepository,
         credentials: CredentialResolver,
         providers: Map<LlmProvider, LlmProviderAdapter>,
+        pricing: PricingCatalog,
       ) =>
         new LlmJobProcessor({
           store: repository,
@@ -106,9 +112,9 @@ const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
               return adapter;
             },
           },
-          credits: repository,
+          pricing,
         }),
-      inject: [LlmJobRepository, CredentialResolver, PROVIDERS],
+      inject: [LlmJobRepository, CredentialResolver, PROVIDERS, PricingCatalog],
     },
     {
       provide: LlmQueueWorkerService,
@@ -128,6 +134,19 @@ export class LlmWorkerModule {}
 function createWorkerProviderRegistry(envInput: NodeJS.ProcessEnv): ProviderRegistry {
   const env = loadRuntimeEnv(envInput);
   return new ProviderRegistry([openAiCapabilities(env), geminiCapabilities(env)]);
+}
+
+export function createPricingCatalog(env: NodeJS.ProcessEnv): PricingCatalog {
+  const raw = env.LLM_PRICING_CATALOG_JSON?.trim() ?? '[]';
+  if (raw.length > 65_536) throw new Error('LLM_PRICING_CATALOG_INVALID');
+  let entries: unknown;
+  try {
+    entries = JSON.parse(raw);
+  } catch {
+    throw new Error('LLM_PRICING_CATALOG_INVALID');
+  }
+  if (!Array.isArray(entries)) throw new Error('LLM_PRICING_CATALOG_INVALID');
+  return new PricingCatalog(env.LLM_PRICING_VERSION?.trim() || 'unconfigured-v1', entries);
 }
 
 function createAdapters(

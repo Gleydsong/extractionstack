@@ -22,7 +22,7 @@ export class BullMqPromptGenerationQueue implements OnModuleDestroy {
       { jobId },
       {
         jobId,
-        attempts: 3,
+        attempts: 10,
         backoff: { type: 'llm-bounded-jitter' },
         removeOnComplete: { age: 3_600, count: 1_000 },
         removeOnFail: false,

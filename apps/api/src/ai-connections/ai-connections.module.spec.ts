@@ -124,6 +124,8 @@ describe('provider registry configuration', () => {
       REDIS_URL: 'redis://redis:6379',
       LLM_CREDENTIAL_MASTER_KEY: Buffer.alloc(32, 7).toString('base64'),
       LLM_CREDENTIAL_KEY_VERSION: 'production-v1',
+      LLM_PRICING_VERSION: 'test-v1',
+      LLM_PRICING_CATALOG_JSON: '[{"provider":"OPENAI","model":"gpt-5-mini"}]',
     }).get('GEMINI');
     expect(gemini.credentialModes).toEqual(['API_KEY', 'PLATFORM_CREDITS']);
     expect(gemini.oauthScopes).toEqual([]);

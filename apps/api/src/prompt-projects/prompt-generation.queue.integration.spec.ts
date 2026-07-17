@@ -43,7 +43,7 @@ describeRedis('BullMqPromptGenerationQueue Redis integration', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({ id: jobId, name: LLM_QUEUE_NAME, data: { jobId } });
     expect(jobs[0]!.opts).toMatchObject({
-      attempts: 3,
+      attempts: 10,
       backoff: { type: 'llm-bounded-jitter' },
       removeOnComplete: { age: 3_600, count: 1_000 },
       removeOnFail: false,

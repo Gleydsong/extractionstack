@@ -26,6 +26,7 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     expect(claimed).not.toBeNull();
     const context = await repository.loadAuthorizedContext(claimed!);
     expect(context.job.ownerId).toBe(fixture.ownerId);
+    await expect(repository.markProviderCompleted(claimed!, 'request-1')).resolves.toBe(true);
 
     await repository.complete({
       job: claimed!,
@@ -37,6 +38,8 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
         providerRequestId: 'request-1',
         usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, estimatedCostMicros: 20_000 },
       },
+      actualAmountMinor: 2n,
+      pricingVersion: 'integration-v1',
     });
 
     await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
@@ -80,6 +83,8 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
         providerRequestId: null,
         usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, estimatedCostMicros: null },
       },
+      actualAmountMinor: null,
+      pricingVersion: 'integration-v1',
     });
     expect(await prisma.promptVersion.count({ where: { projectId: fixture.projectId } })).toBe(0);
     await expect(
@@ -89,15 +94,93 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
 
   it('dead-letters and reverses an open reservation in one terminal transaction', async () => {
     const fixture = await createFixture(prisma, true);
-    await repository.claim(fixture.jobId);
-    await repository.deadLetter(fixture.jobId, 'TIMEOUT');
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.deadLetter(claimed!, 'TIMEOUT');
     await expect(
       prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
     ).resolves.toMatchObject({ status: 'FAILED', errorCode: 'DEAD_LETTER_TIMEOUT' });
     expect(
       await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId, kind: 'REVERSAL' } }),
     ).toBe(1);
-    await repository.deadLetter(fixture.jobId, 'TIMEOUT');
+    await repository.deadLetter(claimed!, 'TIMEOUT');
+    expect(
+      await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId, kind: 'REVERSAL' } }),
+    ).toBe(1);
+  });
+
+  it('gives a stale claimant zero transition and settlement effects after a new lease wins', async () => {
+    const fixture = await createFixture(prisma, true);
+    const staleClaim = await repository.claim(fixture.jobId);
+    expect(staleClaim).not.toBeNull();
+    await prisma.promptGenerationJob.update({
+      where: { id: fixture.jobId },
+      data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    const currentClaim = await repository.claim(fixture.jobId);
+    expect(currentClaim).not.toBeNull();
+    expect(currentClaim!.leaseToken).not.toBe(staleClaim!.leaseToken);
+    expect(currentClaim!.attempts).toBe(staleClaim!.attempts + 1);
+
+    await expect(repository.heartbeat(staleClaim!)).resolves.toBe(false);
+    await expect(repository.markProviderCompleted(staleClaim!, 'stale-request')).resolves.toBe(
+      false,
+    );
+    await expect(repository.markRetry(staleClaim!, 'TIMEOUT')).resolves.toBe(false);
+    await expect(repository.fail(staleClaim!, 'INTERNAL')).resolves.toBe(false);
+    await expect(repository.deadLetter(staleClaim!, 'TIMEOUT')).resolves.toBe(false);
+    await expect(repository.markAmbiguous(staleClaim!, 'PERSISTENCE_FAILED')).resolves.toBe(false);
+    await expect(repository.cancel(staleClaim!)).resolves.toBe(false);
+
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({
+      status: 'RUNNING',
+      leaseToken: currentClaim!.leaseToken,
+      attempts: currentClaim!.attempts,
+    });
+    expect(await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId } })).toBe(1);
+    await expect(repository.deadLetter(currentClaim!, 'TIMEOUT')).resolves.toBe(true);
+    expect(await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId } })).toBe(2);
+  });
+
+  it('atomically dead-letters and reverses a stale lease that exhausted its database attempts', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await prisma.promptGenerationJob.update({
+      where: { id: fixture.jobId },
+      data: {
+        attempts: claimed!.maxAttempts,
+        heartbeatAt: new Date(Date.now() - 10 * 60_000),
+      },
+    });
+
+    await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({
+      status: 'FAILED',
+      errorCode: 'DEAD_LETTER_WORKER_LEASE_EXPIRED',
+      retryable: false,
+      leaseToken: null,
+    });
+    expect(
+      await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId, kind: 'REVERSAL' } }),
+    ).toBe(1);
+  });
+
+  it('atomically marks a stale provider-completed lease ambiguous instead of calling again', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.markProviderCompleted(claimed!, 'paid-request');
+    await prisma.promptGenerationJob.update({
+      where: { id: fixture.jobId },
+      data: { heartbeatAt: new Date(Date.now() - 10 * 60_000) },
+    });
+
+    await expect(repository.claim(fixture.jobId)).resolves.toBeNull();
+    await expect(
+      prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+    ).resolves.toMatchObject({ status: 'AMBIGUOUS', errorCode: 'PERSISTENCE_FAILED' });
     expect(
       await prisma.creditLedgerEntry.count({ where: { jobId: fixture.jobId, kind: 'REVERSAL' } }),
     ).toBe(1);

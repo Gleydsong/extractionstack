@@ -8,3 +8,4 @@ export * from './providers/provider-errors';
 export * from './providers/provider-registry';
 export * from './safety/prompt-safety.service';
 export * from './runtime/credential-resolver';
+export * from './pricing/pricing-catalog';

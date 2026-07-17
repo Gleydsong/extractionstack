@@ -140,6 +140,7 @@ enum PromptJobStatus {
   FAILED
   CANCEL_REQUESTED
   CANCELLED
+  AMBIGUOUS
 }
 
 enum PreviewStatus {
@@ -167,22 +168,24 @@ enum CreditLedgerKind {
 }
 
 model AiConnection {
-  id               String                @id @default(cuid())
-  ownerId          String
-  owner            User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  provider         LlmProvider
-  displayLabel     String                @db.VarChar(120)
-  credentialMode   CredentialMode
-  state            ConnectionState       @default(PENDING)
-  maskedCredential String?               @db.VarChar(32)
-  scopes           String[]
-  expiresAt        DateTime?
-  validatedAt      DateTime?
-  lastUsedAt       DateTime?
-  createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
-  credentials      ProviderCredential[]
-  jobs             PromptGenerationJob[]
+  id                    String                @id @default(cuid())
+  ownerId               String
+  owner                 User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  provider              LlmProvider
+  displayLabel          String                @db.VarChar(120)
+  credentialMode        CredentialMode
+  state                 ConnectionState       @default(PENDING)
+  maskedCredential      String?               @db.VarChar(32)
+  scopes                String[]
+  expiresAt             DateTime?
+  validatedAt           DateTime?
+  lastUsedAt            DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  refreshLeaseToken     String?               @db.Uuid
+  refreshLeaseExpiresAt DateTime?
+  credentials           ProviderCredential[]
+  jobs                  PromptGenerationJob[]
 
   @@unique([ownerId, provider, displayLabel])
   @@index([ownerId, state])
@@ -305,6 +308,10 @@ model PromptGenerationJob {
   finishedAt            DateTime?
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
+  leaseToken            String?             @db.Uuid
+  heartbeatAt           DateTime?
+  providerCompletedAt   DateTime?
+  providerRequestId     String?             @db.VarChar(160)
   previews              PromptPreview[]
   usage                 LlmUsage?
   securityDecisions     SecurityDecision[]

@@ -26,6 +26,7 @@ export type ClaimedLlmJob = Readonly<{
   sourcePromptVersionId: string | null;
   attempts: number;
   maxAttempts: number;
+  leaseToken: string;
 }>;
 
 export type AuthorizedLlmContext = Readonly<{
@@ -34,6 +35,7 @@ export type AuthorizedLlmContext = Readonly<{
   report: InvestigationReport;
   sourcePrompt: PromptVersion | null;
   reservationId: string | null;
+  maximumAcceptedAmountMinor: bigint | null;
 }>;
 
 export type SecurityRecord = Readonly<{
@@ -46,25 +48,25 @@ export type CompletionCommand = Readonly<{
   result: NormalizedGeneration | NormalizedPreview;
   security: SecurityRecord;
   latencyMs: number;
+  actualAmountMinor: bigint | null;
+  pricingVersion: string | null;
 }>;
 
 export interface LlmJobStorePort {
   claim(jobId: string): Promise<ClaimedLlmJob | null>;
   loadAuthorizedContext(job: ClaimedLlmJob): Promise<AuthorizedLlmContext>;
-  isCancellationRequested(jobId: string): Promise<boolean>;
+  isCancellationRequested(job: ClaimedLlmJob): Promise<boolean>;
+  heartbeat(job: ClaimedLlmJob): Promise<boolean>;
+  markProviderCompleted(job: ClaimedLlmJob, providerRequestId: string | null): Promise<boolean>;
   complete(command: CompletionCommand): Promise<boolean>;
-  markRetry(jobId: string, errorCode: string): Promise<void>;
-  fail(jobId: string, errorCode: string): Promise<void>;
-  deadLetter(jobId: string, errorCode: string): Promise<void>;
-  cancel(jobId: string): Promise<void>;
-  reject(jobId: string, reasonCode: string): Promise<void>;
+  markRetry(job: ClaimedLlmJob, errorCode: string): Promise<boolean>;
+  fail(job: ClaimedLlmJob, errorCode: string): Promise<boolean>;
+  deadLetter(job: ClaimedLlmJob, errorCode: string): Promise<boolean>;
+  markAmbiguous(job: ClaimedLlmJob, errorCode: string): Promise<boolean>;
+  cancel(job: ClaimedLlmJob): Promise<boolean>;
+  reject(job: ClaimedLlmJob, reasonCode: string): Promise<boolean>;
 }
 
 export interface ProviderAdapterRegistryPort {
   get(provider: LlmProvider): LlmProviderAdapter;
-}
-
-export interface WorkerCreditsPort {
-  confirm(reservationId: string, actualAmountMinor: bigint): Promise<void>;
-  reverse(reservationId: string, reason: string): Promise<void>;
 }

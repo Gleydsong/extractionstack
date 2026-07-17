@@ -4,9 +4,11 @@ import type {
   ReportNarrativeAssembler,
 } from '@extractionstack/llm-core';
 import {
+  PricingFailure,
   ProviderFailure,
   type CredentialResolver,
   type GenerationInput,
+  type PricingCatalog,
   type PromptLayer,
 } from '@extractionstack/llm-core';
 import type {
@@ -15,7 +17,6 @@ import type {
   LlmJobStorePort,
   ProviderAdapterRegistryPort,
   SecurityRecord,
-  WorkerCreditsPort,
 } from './llm-worker.types';
 
 export type LlmJobProcessorDependencies = Readonly<{
@@ -25,7 +26,7 @@ export type LlmJobProcessorDependencies = Readonly<{
   composer: PromptComposer;
   credentials: CredentialResolver;
   providers: ProviderAdapterRegistryPort;
-  credits: WorkerCreditsPort;
+  pricing: PricingCatalog;
   now?: () => number;
   cancellationPollMs?: number;
 }>;
@@ -37,28 +38,45 @@ export class LlmJobProcessor {
     this.now = dependencies.now ?? Date.now;
   }
 
-  async process(jobId: string, attempt: number, maxAttempts: number): Promise<void> {
-    assertDelivery(jobId, attempt, maxAttempts);
+  async process(
+    jobId: string,
+    transportAttempt: number,
+    transportMaxAttempts: number,
+  ): Promise<void> {
+    assertDelivery(jobId, transportAttempt, transportMaxAttempts);
     const job = await this.dependencies.store.claim(jobId);
     if (!job) return;
     let context: AuthorizedLlmContext | null = null;
+    let providerReturned = false;
 
     try {
       context = await this.dependencies.store.loadAuthorizedContext(job);
-      if (await this.dependencies.store.isCancellationRequested(job.id)) {
+      if (await this.dependencies.store.isCancellationRequested(job)) {
         await this.cancel(context, 'generation cancelled before provider request');
         return;
       }
 
       const brief = this.dependencies.assembler.assemble(context.report);
       const inspection = this.dependencies.safety.inspect(brief.narrative);
+      const wizardInspection = this.dependencies.safety.inspect(wizardSafetyText(context.wizard));
       const security: SecurityRecord = Object.freeze({
-        action: inspection.modified || brief.safetyReasonCodes.length ? 'REDACT' : 'ALLOW',
+        action:
+          inspection.modified || wizardInspection.modified || brief.safetyReasonCodes.length
+            ? 'REDACT'
+            : 'ALLOW',
         reasonCodes: Object.freeze([
-          ...new Set([...brief.safetyReasonCodes, ...inspection.reasonCodes]),
+          ...new Set([
+            ...brief.safetyReasonCodes,
+            ...inspection.reasonCodes,
+            ...wizardInspection.reasonCodes,
+          ]),
         ]),
       });
-      const composed = this.dependencies.composer.compose({ wizard: context.wizard, brief });
+      const composed = this.dependencies.composer.compose({
+        wizard: context.wizard,
+        brief,
+        sourcePrompt: context.sourcePrompt,
+      });
       const credential = await this.dependencies.credentials.resolve({
         ownerId: job.ownerId,
         provider: job.provider,
@@ -85,48 +103,71 @@ export class LlmJobProcessor {
           ? adapter.generatePreview({ generation, preview: previewInput(context!) })
           : adapter.generatePrompt(generation),
       );
+      providerReturned = true;
       const latencyMs = Math.max(0, this.now() - startedAt);
 
-      if (await this.dependencies.store.isCancellationRequested(job.id)) {
+      if (await this.dependencies.store.isCancellationRequested(job)) {
         await this.cancel(context, 'late provider result discarded after cancellation');
         return;
       }
 
-      const completed = await this.dependencies.store.complete({
-        job,
-        result,
-        security,
-        latencyMs,
-      });
+      let priced;
+      try {
+        priced = this.dependencies.pricing.price(job.provider, job.model, result.usage);
+      } catch (cause) {
+        const code = cause instanceof PricingFailure ? cause.code : 'PRICING_NOT_CONFIGURED';
+        await this.dependencies.store.markAmbiguous(job, code);
+        return;
+      }
+      if (context.reservationId && priced.amountMinor <= 0n) {
+        await this.dependencies.store.markAmbiguous(job, 'PRICING_USAGE_INSUFFICIENT');
+        return;
+      }
+      if (
+        context.maximumAcceptedAmountMinor !== null &&
+        priced.amountMinor > context.maximumAcceptedAmountMinor
+      ) {
+        await this.dependencies.store.fail(job, 'CREDIT_COST_LIMIT_EXCEEDED');
+        return;
+      }
+      if (!(await this.dependencies.store.markProviderCompleted(job, result.providerRequestId)))
+        return;
+
+      let completed: boolean;
+      try {
+        completed = await this.dependencies.store.complete({
+          job,
+          result,
+          security,
+          latencyMs,
+          actualAmountMinor: context.reservationId ? priced.amountMinor : null,
+          pricingVersion: priced.pricingVersion,
+        });
+      } catch {
+        await this.dependencies.store.markAmbiguous(job, 'PERSISTENCE_FAILED').catch(() => false);
+        return;
+      }
       if (!completed) {
         await this.cancel(context, 'generation cancelled during persistence');
         return;
       }
-      if (context.reservationId) {
-        await this.dependencies.credits.confirm(
-          context.reservationId,
-          microsToMinor(result.usage.estimatedCostMicros),
-        );
-      }
     } catch (cause) {
       const failure = sanitizedFailure(cause);
+      if (providerReturned) {
+        await this.dependencies.store.markAmbiguous(job, 'PERSISTENCE_FAILED').catch(() => false);
+        return;
+      }
       if (failure.code === 'REQUEST_CANCELLED' && context) {
         await this.cancel(context, 'provider request aborted after cancellation');
         return;
       }
-      if (failure.retryable && attempt < Math.min(maxAttempts, job.maxAttempts)) {
-        await this.dependencies.store.markRetry(job.id, failure.code);
-        throw failure;
+      if (failure.retryable && job.attempts < job.maxAttempts) {
+        if (await this.dependencies.store.markRetry(job, failure.code)) throw failure;
+        return;
       }
 
-      if (failure.retryable) await this.dependencies.store.deadLetter(job.id, failure.code);
-      else await this.dependencies.store.fail(job.id, failure.code);
-      if (context?.reservationId) {
-        await this.dependencies.credits.reverse(
-          context.reservationId,
-          failure.retryable ? 'generation retries exhausted' : 'generation failed',
-        );
-      }
+      if (failure.retryable) await this.dependencies.store.deadLetter(job, failure.code);
+      else await this.dependencies.store.fail(job, failure.code);
     }
   }
 
@@ -139,10 +180,12 @@ export class LlmJobProcessor {
     const timer = setInterval(() => {
       if (checking || controller.signal.aborted) return;
       checking = true;
-      void this.dependencies.store
-        .isCancellationRequested(job.id)
-        .then((cancelled) => {
-          if (cancelled) controller.abort();
+      void Promise.all([
+        this.dependencies.store.isCancellationRequested(job),
+        this.dependencies.store.heartbeat(job).then((active) => !active),
+      ])
+        .then((states) => {
+          if (states.some(Boolean)) controller.abort();
         })
         .finally(() => {
           checking = false;
@@ -157,9 +200,8 @@ export class LlmJobProcessor {
   }
 
   private async cancel(context: AuthorizedLlmContext, reason: string): Promise<void> {
-    await this.dependencies.store.cancel(context.job.id);
-    if (context.reservationId)
-      await this.dependencies.credits.reverse(context.reservationId, reason);
+    void reason;
+    await this.dependencies.store.cancel(context.job);
   }
 }
 
@@ -201,9 +243,15 @@ function sanitizedFailure(cause: unknown): ProviderFailure {
   return new ProviderFailure('PROVIDER_UNAVAILABLE', { retryable: true });
 }
 
-function microsToMinor(value: number | null): bigint {
-  if (value === null) return 0n;
-  return BigInt(Math.ceil(value / 10_000));
+function wizardSafetyText(wizard: AuthorizedLlmContext['wizard']): string {
+  return [
+    wizard.objective,
+    wizard.audience,
+    wizard.freeInstructions,
+    ...wizard.technologies,
+    ...wizard.requirements,
+    ...wizard.exclusions,
+  ].join('\n');
 }
 
 function assertDelivery(jobId: string, attempt: number, maxAttempts: number): void {

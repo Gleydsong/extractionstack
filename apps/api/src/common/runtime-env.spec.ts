@@ -21,6 +21,8 @@ const productionBase = {
   LLM_MAX_INPUT_TOKENS: '32000',
   LLM_MAX_OUTPUT_TOKENS: '4096',
   LLM_MAX_COST_MINOR_UNITS: '500',
+  LLM_PRICING_VERSION: 'production-2026-07-17',
+  LLM_PRICING_CATALOG_JSON: JSON.stringify([{ provider: 'OPENAI', model: 'gpt-5-mini' }]),
 };
 
 describe('loadRuntimeEnv', () => {
@@ -40,6 +42,7 @@ describe('loadRuntimeEnv', () => {
     { ...productionBase, CORS_ORIGIN: '*' },
     { ...productionBase, AUTH0_DOMAIN: 'your-tenant.us.auth0.com' },
     { ...productionBase, WORKER_CONCURRENCY: '0' },
+    { ...productionBase, LLM_PRICING_VERSION: 'unconfigured-v1', LLM_PRICING_CATALOG_JSON: '[]' },
   ])('rejects an unsafe production environment', (input) => {
     expect(() => loadRuntimeEnv(input)).toThrow();
   });
@@ -125,6 +128,7 @@ describe('loadRuntimeEnv', () => {
     { LLM_MAX_INPUT_TOKENS: '0' },
     { LLM_MAX_OUTPUT_TOKENS: '1000001' },
     { LLM_MAX_COST_MINOR_UNITS: '-1' },
+    { LLM_PRICING_CATALOG_JSON: ' '.repeat(65_537) },
   ])('rejects unsafe LLM runtime configuration', (patch) => {
     expect(() => loadRuntimeEnv({ ...productionBase, ...patch })).toThrow();
   });

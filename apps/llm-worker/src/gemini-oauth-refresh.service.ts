@@ -3,6 +3,7 @@ import {
   type OAuthCredentialRefreshPort,
   type StoredProviderCredential,
 } from '@extractionstack/llm-core';
+import { randomUUID } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { CredentialVault } from '../../api/src/ai-connections/credential-vault.js';
@@ -48,6 +49,34 @@ export class GeminiOAuthRefreshService implements OAuthCredentialRefreshPort {
       this.env.LLM_GEMINI_OAUTH_TOKEN_URL ?? 'https://oauth2.googleapis.com/token',
     );
     if (tokenUrl.protocol !== 'https:') throw new ProviderFailure('AUTHENTICATION_FAILED');
+    const leaseToken = randomUUID();
+    await this.acquireLease(connectionId, stored, leaseToken);
+    try {
+      const rotated = await this.readRotatedCredential(connectionId, stored);
+      if (rotated) return rotated;
+      return await this.refreshWithLease(
+        connectionId,
+        stored,
+        current.refreshToken,
+        clientId,
+        clientSecret,
+        tokenUrl,
+        leaseToken,
+      );
+    } finally {
+      await this.releaseLease(connectionId, leaseToken).catch(() => undefined);
+    }
+  }
+
+  private async refreshWithLease(
+    connectionId: string,
+    stored: StoredProviderCredential,
+    refreshToken: string,
+    clientId: string,
+    clientSecret: string,
+    tokenUrl: URL,
+    leaseToken: string,
+  ): Promise<string> {
     let response: Response;
     try {
       response = await this.fetchImpl(tokenUrl, {
@@ -58,7 +87,7 @@ export class GeminiOAuthRefreshService implements OAuthCredentialRefreshPort {
         },
         body: new URLSearchParams({
           grant_type: 'refresh_token',
-          refresh_token: current.refreshToken,
+          refresh_token: refreshToken,
           client_id: clientId,
           client_secret: clientSecret,
         }),
@@ -86,13 +115,12 @@ export class GeminiOAuthRefreshService implements OAuthCredentialRefreshPort {
     const expiresAt = new Date(Date.now() + parsed.data.expires_in * 1_000);
     const payload = JSON.stringify({
       accessToken: parsed.data.access_token,
-      refreshToken: parsed.data.refresh_token ?? current.refreshToken,
+      refreshToken: parsed.data.refresh_token ?? refreshToken,
       expiresAt: expiresAt.toISOString(),
     });
     const envelope = await this.vault.encrypt(stored.encryptionOwnerId, 'GEMINI', payload);
 
     return this.prisma.$transaction(async (transaction) => {
-      await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${connectionId}, 0))::text AS "lock"`;
       const connection = await transaction.aiConnection.findFirst({
         where: {
           id: connectionId,
@@ -100,6 +128,8 @@ export class GeminiOAuthRefreshService implements OAuthCredentialRefreshPort {
           provider: 'GEMINI',
           credentialMode: 'OAUTH',
           state: 'ACTIVE',
+          refreshLeaseToken: leaseToken,
+          refreshLeaseExpiresAt: { gt: new Date() },
         },
         include: {
           credentials: { where: { deletedAt: null }, orderBy: { version: 'desc' }, take: 1 },
@@ -107,18 +137,8 @@ export class GeminiOAuthRefreshService implements OAuthCredentialRefreshPort {
       });
       const latest = connection?.credentials[0];
       if (!connection || !latest) throw new ProviderFailure('AUTHORIZATION_FAILED');
-      if (latest.version !== stored.credentialVersion) {
-        try {
-          const plaintext = await this.vault.decrypt(
-            stored.encryptionOwnerId,
-            'GEMINI',
-            fromPrismaEnvelope(latest),
-          );
-          return parseStored(plaintext).accessToken;
-        } catch {
-          throw new ProviderFailure('AUTHENTICATION_FAILED');
-        }
-      }
+      if (latest.version !== stored.credentialVersion)
+        throw new ProviderFailure('PROVIDER_UNAVAILABLE', { retryable: true });
       await transaction.providerCredential.create({
         data: { connectionId, version: latest.version + 1, ...toPrismaEnvelope(envelope) },
       });
@@ -126,11 +146,80 @@ export class GeminiOAuthRefreshService implements OAuthCredentialRefreshPort {
         where: { id: latest.id },
         data: { rotatedAt: new Date() },
       });
-      await transaction.aiConnection.update({
-        where: { id: connectionId },
-        data: { expiresAt, validatedAt: new Date(), lastUsedAt: new Date() },
+      const released = await transaction.aiConnection.updateMany({
+        where: { id: connectionId, refreshLeaseToken: leaseToken },
+        data: {
+          expiresAt,
+          validatedAt: new Date(),
+          lastUsedAt: new Date(),
+          refreshLeaseToken: null,
+          refreshLeaseExpiresAt: null,
+        },
       });
+      if (released.count !== 1)
+        throw new ProviderFailure('PROVIDER_UNAVAILABLE', { retryable: true });
       return parsed.data.access_token;
+    });
+  }
+
+  private async acquireLease(
+    connectionId: string,
+    stored: StoredProviderCredential,
+    leaseToken: string,
+  ): Promise<void> {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const now = new Date();
+      const acquired = await this.prisma.aiConnection.updateMany({
+        where: {
+          id: connectionId,
+          ownerId: stored.ownerId,
+          provider: 'GEMINI',
+          credentialMode: 'OAUTH',
+          state: 'ACTIVE',
+          OR: [
+            { refreshLeaseToken: null },
+            { refreshLeaseExpiresAt: null },
+            { refreshLeaseExpiresAt: { lte: now } },
+          ],
+        },
+        data: {
+          refreshLeaseToken: leaseToken,
+          refreshLeaseExpiresAt: new Date(now.getTime() + 45_000),
+        },
+      });
+      if (acquired.count === 1) return;
+      if (await this.readRotatedCredential(connectionId, stored)) return;
+      await delay(50);
+    }
+    throw new ProviderFailure('PROVIDER_UNAVAILABLE', { retryable: true });
+  }
+
+  private async readRotatedCredential(
+    connectionId: string,
+    stored: StoredProviderCredential,
+  ): Promise<string | null> {
+    const latest = await this.prisma.providerCredential.findFirst({
+      where: { connectionId, deletedAt: null, version: { gt: stored.credentialVersion } },
+      orderBy: { version: 'desc' },
+    });
+    if (!latest) return null;
+    try {
+      const plaintext = await this.vault.decrypt(
+        stored.encryptionOwnerId,
+        'GEMINI',
+        fromPrismaEnvelope(latest),
+      );
+      return parseStored(plaintext).accessToken;
+    } catch {
+      throw new ProviderFailure('AUTHENTICATION_FAILED');
+    }
+  }
+
+  private async releaseLease(connectionId: string, leaseToken: string): Promise<void> {
+    await this.prisma.aiConnection.updateMany({
+      where: { id: connectionId, refreshLeaseToken: leaseToken },
+      data: { refreshLeaseToken: null, refreshLeaseExpiresAt: null },
     });
   }
 }
@@ -171,7 +260,14 @@ async function readBounded(response: Response, maxBytes: number): Promise<string
     output += decoder.decode();
     return output;
   } catch (error) {
+    await reader.cancel().catch(() => undefined);
     if (error instanceof ProviderFailure) throw error;
     throw new ProviderFailure('INVALID_RESPONSE');
+  } finally {
+    reader.releaseLock();
   }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
