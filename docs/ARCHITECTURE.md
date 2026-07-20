@@ -7,6 +7,10 @@ React/Vite ──HTTP──> NestJS API ──Prisma──> PostgreSQL
                          │
                          └──BullMQ──> Redis ──> Worker ──> Playwright + detectores
                                                      └──Prisma──> relatório persistido
+                         │
+                         └──fila LLM──> LLM Worker ──> adapter de provedor
+                                            ├──guardrails/composição/pricing
+                                            └──Prisma──> versões + uso + ledger
 ```
 
 O request HTTP apenas valida identidade/entrada, cria um job idempotente e responde `202`. A extração pesada fica no worker; o cliente consulta o estado até um terminal e usa o histórico persistido.
@@ -27,14 +31,25 @@ apps/worker
 ├── WorkerProcessor      claim, extração, validação, retry/finalização
 └── WorkerJobRepository  transições atômicas e relatório
 
+apps/llm-worker
+├── LlmQueueWorkerService  consumo isolado, retry e shutdown
+├── LlmJobProcessor        guardrails, composição, adapter e persistência
+├── CredentialResolver     credencial por usuário/OAuth/crédito da plataforma
+└── OperationsService      heartbeat, readiness e métricas limitadas
+
 apps/web
 ├── auth          Auth0 ou provider local explícito
 ├── extractions   dashboard, polling, histórico, detalhe e cancelamento
 ├── extract       formulário e apresentação do relatório
+├── ai-connections credenciais mascaradas e OAuth quando configurado
+├── prompt-generation wizard, instruções livres, revisão e workspace versionado
 └── lib           cliente HTTP com validação runtime
 
 packages/shared
 └── schemas       fonte única dos contratos Zod e tipos derivados
+
+packages/llm-core
+└── prompt/providers/safety/pricing regras puras e adapters substituíveis
 ```
 
 ## Fluxo de dados
@@ -54,6 +69,16 @@ packages/shared
 - Detectores recebem um `CrawledPage`, não compartilham estado e falham isoladamente por seção.
 - Contratos entre processos e browser são validados em runtime, não apenas pelo TypeScript.
 - O worker é a fronteira de conteúdo não confiável e deve ter egress/filesystem/credenciais mínimos.
+- O LLM worker é um processo e uma fila separados: falha ou latência do provedor não consome capacidade do crawler.
+- Estruturas do provedor são validadas internamente; a fronteira pública converte resultados e erros para linguagem natural.
+- Versões de prompt são imutáveis. Geração, adaptação e edição criam nova versão ligada à extração de origem.
+- `LLM_PROVIDER_MODE=fake` habilita somente o double determinístico; `live` é obrigatório em produção.
+
+## Topologia e confiança de proxy
+
+`API_TRUST_PROXY=false` é o padrão correto quando a API recebe tráfego diretamente. Atrás de um ingress,
+configure somente CIDRs privados exatos ou um número de hops verificado. Nunca use `1` por conveniência em uma
+API também exposta diretamente: um cliente poderia forjar headers encaminhados e afetar rate limiting/auditoria.
 
 ## Transições de estado
 

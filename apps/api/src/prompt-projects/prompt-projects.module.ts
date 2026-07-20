@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PricingCatalog } from '@extractionstack/llm-core';
 import { Queue } from 'bullmq';
 import { AiConnectionsModule } from '../ai-connections/ai-connections.module.js';
 import { loadRuntimeEnv } from '../common/runtime-env.js';
@@ -23,6 +24,7 @@ import {
   PROMPT_PROJECTS_REPOSITORY,
   PromptProjectsService,
 } from './prompt-projects.service.js';
+import { createApiPricingCatalog } from './pricing-catalog.factory.js';
 
 @Module({
   imports: [PrismaModule, AiConnectionsModule, CreditsModule],
@@ -36,6 +38,10 @@ import {
     PromptProjectsRepository,
     PromptProjectsService,
     LlmReconciliationService,
+    {
+      provide: PricingCatalog,
+      useFactory: () => createApiPricingCatalog(process.env),
+    },
     BullMqPromptGenerationQueue,
     {
       provide: LLM_BULL_QUEUE,

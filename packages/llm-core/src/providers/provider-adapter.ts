@@ -30,19 +30,7 @@ export type ProviderCapabilities = Readonly<{
   circuitBreakerOpen: boolean;
 }>;
 
-export type PublicProviderCapabilities = Readonly<{
-  provider: LlmProvider;
-  credentialModes: readonly CredentialMode[];
-  models: readonly string[];
-  contextWindowTokens: number;
-  maxOutputTokens: number;
-  supportsStructuredOutput: boolean;
-  supportsCancellation: boolean;
-  supportsCredentialRefresh: boolean;
-  previewEligible: boolean;
-  enabled: boolean;
-  circuitBreakerOpen: boolean;
-}>;
+export type { PublicProviderCapabilities } from '@extractionstack/shared';
 
 const NaturalLanguageContentSchema = z.string().trim().min(1).max(100_000);
 const PreviewContentSchema = z.string().trim().min(1).max(50_000);

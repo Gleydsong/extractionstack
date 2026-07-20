@@ -34,11 +34,12 @@ const PromptDestinationSchema = z.enum([
 
 export const MAXIMUM_COST_MINOR = 1_000_000_000_000n;
 
-const MaximumCostMinorSchema = z
+const PositiveCostMinorSchema = z
   .string()
   .regex(/^[1-9][0-9]{0,12}$/)
-  .refine((value) => BigInt(value) <= MAXIMUM_COST_MINOR, 'maximum cost exceeds the limit')
-  .nullable();
+  .refine((value) => BigInt(value) <= MAXIMUM_COST_MINOR, 'maximum cost exceeds the limit');
+
+const MaximumCostMinorSchema = PositiveCostMinorSchema.nullable();
 
 const PromptExecutionRequestObjectSchema = z
   .object({
@@ -144,6 +145,59 @@ export const PromptWizardInputSchema = z
   .strict();
 export type PromptWizardInput = z.infer<typeof PromptWizardInputSchema>;
 
+export const PromptCostEstimateRequestSchema = z
+  .object({
+    wizard: PromptWizardInputSchema,
+    provider: LlmProviderSchema,
+    model: z.string().trim().min(1).max(128),
+  })
+  .strict();
+export type PromptCostEstimateRequest = z.infer<typeof PromptCostEstimateRequestSchema>;
+
+export const PromptCostEstimateSchema = z
+  .object({
+    provider: LlmProviderSchema,
+    model: z.string().trim().min(1).max(128),
+    maximumInputTokens: z.number().int().positive().max(2_147_483_647),
+    maximumOutputTokens: z.number().int().positive().max(1_000_000),
+    maximumCostMinor: PositiveCostMinorSchema,
+    pricingVersion: z.string().trim().min(1).max(64),
+    quotedAt: PublicIsoDateTimeSchema,
+  })
+  .strict();
+export type PromptCostEstimate = z.infer<typeof PromptCostEstimateSchema>;
+
+export const PromptVersionCostEstimateRequestSchema = z.discriminatedUnion('operation', [
+  z
+    .object({
+      provider: LlmProviderSchema,
+      model: z.string().trim().min(1).max(128),
+      operation: z.literal('ADAPT'),
+      destination: PromptDestinationSchema.exclude(['universal']),
+    })
+    .strict(),
+  z
+    .object({
+      provider: LlmProviderSchema,
+      model: z.string().trim().min(1).max(128),
+      operation: z.literal('PREVIEW'),
+    })
+    .strict(),
+]);
+export type PromptVersionCostEstimateRequest = z.infer<
+  typeof PromptVersionCostEstimateRequestSchema
+>;
+
+export const PromptVersionCostEstimateSchema = PromptCostEstimateSchema.extend({
+  sourceVersionId: PublicIdSchema,
+  operation: z.enum(['ADAPT', 'PREVIEW']),
+  reportSections: z
+    .array(z.enum(['technologies', 'structure', 'evidence', 'limitations', 'confidence']))
+    .length(5),
+  retentionNotice: z.string().trim().min(1).max(500),
+}).strict();
+export type PromptVersionCostEstimate = z.infer<typeof PromptVersionCostEstimateSchema>;
+
 export const PromptProjectSchema = z
   .object({
     id: PublicIdSchema,
@@ -187,6 +241,51 @@ export const PromptVersionSchema = z
   })
   .strict();
 export type PromptVersion = z.infer<typeof PromptVersionSchema>;
+
+const PromptVersionPublicBaseShape = {
+  id: PublicIdSchema,
+  projectId: PublicIdSchema,
+  sequence: z.number().int().positive(),
+  sourceVersionId: PublicIdSchema.nullable(),
+  kind: z.enum(['UNIVERSAL', 'ADAPTED']),
+  destination: PromptDestinationSchema,
+  summary: z.string().trim().min(1).max(2_000),
+  provider: LlmProviderSchema.nullable(),
+  model: z.string().trim().min(1).max(128).nullable(),
+  createdAt: PublicIsoDateTimeSchema,
+} as const;
+
+export const PromptVersionSummarySchema = z.object(PromptVersionPublicBaseShape).strict();
+export type PromptVersionSummary = z.infer<typeof PromptVersionSummarySchema>;
+
+export const PromptVersionDetailSchema = z
+  .object({
+    ...PromptVersionPublicBaseShape,
+    content: z.string().trim().min(1).max(100_000),
+  })
+  .strict();
+export type PromptVersionDetail = z.infer<typeof PromptVersionDetailSchema>;
+
+export const PromptVersionListQuerySchema = z
+  .object({
+    cursor: PublicIdSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+export type PromptVersionListQuery = z.infer<typeof PromptVersionListQuerySchema>;
+
+export const PromptVersionListResponseSchema = z
+  .object({
+    items: z.array(PromptVersionSummarySchema).max(100),
+    nextCursor: PublicIdSchema.nullable(),
+  })
+  .strict();
+export type PromptVersionListResponse = z.infer<typeof PromptVersionListResponseSchema>;
+
+export const PromptVersionEditRequestSchema = z
+  .object({ content: z.string().trim().min(1).max(100_000) })
+  .strict();
+export type PromptVersionEditRequest = z.infer<typeof PromptVersionEditRequestSchema>;
 
 const PromptJobBaseSchema = z.object({
   id: PublicIdSchema,

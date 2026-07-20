@@ -18,6 +18,8 @@ describe('LLM worker pricing startup', () => {
       createPricingCatalog({
         LLM_PRICING_VERSION: 'test-v1',
         LLM_PRICING_CATALOG_JSON: JSON.stringify([rate('OPENAI', 'gpt-test')]),
+        LLM_PROMPT_GENERATION_ENABLED: 'true',
+        LLM_PROVIDER_MODE: 'live',
         LLM_OPENAI_MODEL_ALLOWLIST: 'gpt-test',
         LLM_GEMINI_MODEL_ALLOWLIST: 'gemini-test',
       }),
@@ -31,6 +33,8 @@ describe('LLM worker pricing startup', () => {
         rate('OPENAI', 'gpt-test'),
         rate('GEMINI', 'gemini-test'),
       ]),
+      LLM_PROMPT_GENERATION_ENABLED: 'true',
+      LLM_PROVIDER_MODE: 'live',
       LLM_OPENAI_MODEL_ALLOWLIST: 'gpt-test',
       LLM_GEMINI_MODEL_ALLOWLIST: 'gemini-test',
     });

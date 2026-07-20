@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CreditsRepository } from './credits.repository.js';
 import { CreditsService } from './credits.service.js';
 
@@ -23,6 +23,10 @@ describePostgres('CreditsRepository PostgreSQL integration', () => {
 
   afterAll(async () => {
     await prisma.$disconnect();
+  });
+
+  afterEach(() => {
+    delete process.env.LLM_DAILY_PLATFORM_CREDIT_BUDGET_MINOR;
   });
 
   it('returns the same reservation for the same command and conflicts when the command changes', async () => {
@@ -51,6 +55,30 @@ describePostgres('CreditsRepository PostgreSQL integration', () => {
     });
     await expect(service.getAvailableBalance(ownerId)).resolves.toBe('200');
     expect(await ledgerCount(prisma, ownerId, 'RESERVATION')).toBe(1);
+  });
+
+  it('serializes the daily budget and counts open reservations before insertion', async () => {
+    process.env.LLM_DAILY_PLATFORM_CREDIT_BUDGET_MINOR = '150';
+    const outcomes = await Promise.allSettled([
+      service.reserve(ownerId, jobIds[0], 100n, 'daily-left'),
+      service.reserve(ownerId, jobIds[1], 100n, 'daily-right'),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.find((outcome) => outcome.status === 'rejected')).toMatchObject({
+      reason: expect.objectContaining({ message: 'CREDIT_DAILY_BUDGET_EXCEEDED' }),
+    });
+  });
+
+  it('frees reversed budget and retains only confirmed actual spend', async () => {
+    process.env.LLM_DAILY_PLATFORM_CREDIT_BUDGET_MINOR = '150';
+    const reversed = await service.reserve(ownerId, jobIds[0], 100n, 'daily-reversed');
+    await expect(service.reserve(ownerId, jobIds[1], 60n, 'daily-blocked')).rejects.toThrow(
+      'CREDIT_DAILY_BUDGET_EXCEEDED',
+    );
+    await service.reverse(reversed.id, 'cancelled');
+    const confirmed = await service.reserve(ownerId, jobIds[1], 100n, 'daily-confirmed');
+    await service.confirm(confirmed.id, 40n);
+    await expect(service.reserve(ownerId, jobIds[2], 110n, 'daily-exact')).resolves.toBeDefined();
   });
 
   it('rejects overspend and rolls the whole transaction back', async () => {

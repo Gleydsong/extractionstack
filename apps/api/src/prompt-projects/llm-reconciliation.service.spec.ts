@@ -50,7 +50,7 @@ describe('LlmReconciliationService', () => {
     expect(transaction.creditLedgerEntry.create).not.toHaveBeenCalled();
   });
 
-  it('records zero-delta confirmation, audit, and idempotency in one transaction', async () => {
+  it('records confirmation from the scoped reservation when metadata and snapshot are corrupt', async () => {
     const transaction = {
       user: { findUnique: vi.fn().mockResolvedValue({ id: 'admin-1' }) },
       $queryRaw: vi.fn().mockResolvedValue([{ id: 'job-1' }]),
@@ -64,20 +64,23 @@ describe('LlmReconciliationService', () => {
           ownerId: 'owner-1',
           status: 'AMBIGUOUS',
           providerStage: 'STARTED',
-          providerSnapshot: null,
-          creditLedgerEntries: [
-            {
-              id: 'reservation-1',
-              ownerId: 'owner-1',
-              amountMinor: -100n,
-              currency: 'CREDITS',
-              metadata: { maximumAcceptedAmountMinor: '100' },
-            },
-          ],
+          providerSnapshot: { corrupt: true },
         }),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
-      creditLedgerEntry: { create: vi.fn().mockResolvedValue({}) },
+      creditLedgerEntry: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'reservation-1',
+            ownerId: 'owner-1',
+            amountMinor: -100n,
+            currency: 'CREDITS',
+            metadata: { maximumAcceptedAmountMinor: 'corrupt' },
+            settlement: null,
+          },
+        ]),
+        create: vi.fn().mockResolvedValue({}),
+      },
       auditEvent: { create: vi.fn().mockResolvedValue({}) },
     };
     const prisma = { $transaction: vi.fn((callback) => callback(transaction)) };
@@ -98,6 +101,16 @@ describe('LlmReconciliationService', () => {
     ).resolves.toEqual({ jobId: 'job-1', status: 'accepted', replayed: false });
     expect(transaction.creditLedgerEntry.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ kind: 'CONFIRMATION', amountMinor: 0n }),
+    });
+    expect(transaction.creditLedgerEntry.findMany).toHaveBeenCalledWith({
+      where: {
+        ownerId: 'owner-1',
+        jobId: 'job-1',
+        currency: 'CREDITS',
+        kind: 'RESERVATION',
+      },
+      include: { settlement: { select: { id: true } } },
+      take: 2,
     });
     expect(transaction.auditEvent.create).toHaveBeenCalledOnce();
     expect(transaction.mutationIdempotency.create).toHaveBeenCalledOnce();

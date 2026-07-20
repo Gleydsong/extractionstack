@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  requestIdMiddleware,
-  requestLogContext,
-  type RequestWithId,
-} from './request-context.js';
+import { requestIdMiddleware, requestLogContext, type RequestWithId } from './request-context.js';
+import { ErrorResponseSchema } from '@extractionstack/shared';
 
 function invoke(value?: string): { id: string; header: unknown; next: ReturnType<typeof vi.fn> } {
   const request = { header: vi.fn().mockReturnValue(value) } as unknown as RequestWithId;
@@ -14,17 +11,23 @@ function invoke(value?: string): { id: string; header: unknown; next: ReturnType
 }
 
 describe('requestIdMiddleware', () => {
-  it('preserves a safe caller correlation id', () => {
-    const result = invoke('job:123.trace-1');
-    expect(result.id).toBe('job:123.trace-1');
+  it('preserves a canonical UUID caller correlation id', () => {
+    const supplied = 'cb6d0478-a915-4d09-bde4-b6270d677e6a';
+    const result = invoke(supplied);
+    expect(result.id).toBe(supplied);
     expect(result.header).toBe(result.id);
     expect(result.next).toHaveBeenCalledOnce();
   });
 
-  it.each(['', 'contains spaces', '<script>', 'a'.repeat(129)])(
+  it.each(['', 'job:123.trace-1', 'contains spaces', '<script>', 'a'.repeat(129)])(
     'replaces unsafe correlation id %j',
     (value) => {
-      expect(invoke(value).id).toMatch(/^[0-9a-f-]{36}$/);
+      const generated = invoke(value).id;
+      expect(generated).toMatch(/^[0-9a-f-]{36}$/);
+      expect(
+        ErrorResponseSchema.safeParse({ code: 'INTERNAL', message: 'Falha.', requestId: generated })
+          .success,
+      ).toBe(true);
     },
   );
 });

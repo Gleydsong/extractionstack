@@ -8,6 +8,7 @@ Aplicação full-stack que recebe uma URL pública, executa uma análise assínc
 - NestJS: autenticação/RBAC, contratos Zod, ownership, idempotência e API de jobs.
 - BullMQ/Redis: fila, retry e concorrência controlada.
 - Worker/Playwright: navegação isolável, guardrails SSRF e 29 detectores.
+- LLM worker/BullMQ: geração, adaptação e preview por adapters; provedor falso determinístico por padrão.
 - PostgreSQL/Prisma: jobs, relatórios e auditoria.
 - Operação: logs JSON correlacionados, health/readiness, métricas Prometheus, CI e Docker Compose.
 
@@ -41,6 +42,8 @@ pnpm dev
 ```
 
 O bypass `AUTH_DEV_MODE=true` existe apenas para desenvolvimento e é rejeitado quando `NODE_ENV=production`.
+O ambiente local usa `LLM_PROVIDER_MODE=fake`: nenhuma chamada paga ou externa é feita. A geração aceita
+instruções guiadas e livres e sempre apresenta prompt, preview e erros em linguagem natural, nunca JSON interno.
 
 ## API assíncrona
 
@@ -56,11 +59,17 @@ pnpm verify       # lint + typecheck + unitários + builds
 pnpm test:e2e     # contrato HTTP Nest + fluxos Chromium
 ```
 
+O smoke de provedor real é uma ação protegida de release, nunca de PR: exige
+`RUN_REAL_PROVIDER_SMOKE=true` e `LLM_SMOKE_MAX_COST_MINOR_UNITS` entre 0 e 1.
+
 ## Documentação operacional
 
 - [Maturidade e roadmap](docs/operations/production-readiness.md)
 - [Modelo de segurança](docs/security/security-model.md)
 - [Contrato do relatório e cobertura](docs/product/investigation-report.md)
+- [Geração de prompts](docs/product/prompt-generation.md)
+- [Operação de provedores LLM](docs/operations/llm-provider-runbook.md)
+- [Threat model LLM](docs/security/llm-threat-model.md)
 - [Runbook de incidentes](docs/runbooks/incident-response.md)
 - [Arquitetura](docs/ARCHITECTURE.md)
 
@@ -69,7 +78,9 @@ pnpm test:e2e     # contrato HTTP Nest + fluxos Chromium
 ```text
 apps/api       API NestJS
 apps/worker    consumidor BullMQ + crawler
+apps/llm-worker consumidor dedicado da fila de prompts
 apps/web       React/Vite
+packages/llm-core adapters, composição, guardrails e pricing
 packages/shared contratos Zod e tipos
 e2e            testes browser Playwright
 ops            configuração de runtime

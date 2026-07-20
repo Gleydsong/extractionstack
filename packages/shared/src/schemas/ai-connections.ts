@@ -40,6 +40,89 @@ export const ProviderAuthorizationSchema = z
   });
 export type ProviderAuthorization = z.infer<typeof ProviderAuthorizationSchema>;
 
+const PublicProviderCapabilitiesBaseShape = {
+  models: z.array(z.string().trim().min(1).max(128)).max(100).readonly(),
+  contextWindowTokens: z.number().int().positive().max(10_000_000),
+  maxOutputTokens: z.number().int().positive().max(1_000_000),
+  supportsStructuredOutput: z.boolean(),
+  supportsCancellation: z.boolean(),
+  supportsCredentialRefresh: z.boolean(),
+  previewEligible: z.boolean(),
+  enabled: z.boolean(),
+  circuitBreakerOpen: z.boolean(),
+} as const;
+
+export const PublicProviderCapabilitiesSchema = z
+  .discriminatedUnion('provider', [
+    z
+      .object({
+        provider: z.literal('FAKE'),
+        credentialModes: z.tuple([z.literal('PLATFORM_CREDITS')]).readonly(),
+        ...PublicProviderCapabilitiesBaseShape,
+      })
+      .strict(),
+    z
+      .object({
+        provider: z.literal('OPENAI'),
+        credentialModes: z.tuple([z.literal('API_KEY'), z.literal('PLATFORM_CREDITS')]).readonly(),
+        ...PublicProviderCapabilitiesBaseShape,
+      })
+      .strict(),
+    z
+      .object({
+        provider: z.literal('GEMINI'),
+        credentialModes: z
+          .union([
+            z.tuple([z.literal('API_KEY'), z.literal('PLATFORM_CREDITS')]),
+            z.tuple([z.literal('OAUTH'), z.literal('API_KEY'), z.literal('PLATFORM_CREDITS')]),
+          ])
+          .readonly(),
+        ...PublicProviderCapabilitiesBaseShape,
+      })
+      .strict(),
+  ])
+  .readonly();
+export type PublicProviderCapabilities = z.infer<typeof PublicProviderCapabilitiesSchema>;
+
+export const PublicProviderCapabilitiesListSchema = z
+  .array(PublicProviderCapabilitiesSchema)
+  .max(20)
+  .readonly();
+
+export const GeminiOAuthStartResponseSchema = z
+  .object({
+    state: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    authorizationUrl: z.string().url().max(4_096).refine(isHttpsUrl, 'OAuth URL must use HTTPS'),
+  })
+  .strict()
+  .superRefine(({ state, authorizationUrl }, context) => {
+    if (readUrlState(authorizationUrl) !== state) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['authorizationUrl'],
+        message: 'OAuth URL state must match response state',
+      });
+    }
+  })
+  .readonly();
+export type GeminiOAuthStartResponse = z.infer<typeof GeminiOAuthStartResponseSchema>;
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function readUrlState(value: string): string | null {
+  try {
+    return new URL(value).searchParams.get('state');
+  } catch {
+    return null;
+  }
+}
+
 function validateProviderAuthorization(
   value: ProviderAuthorization,
   context: z.RefinementCtx,

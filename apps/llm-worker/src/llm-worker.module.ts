@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
+import { Queue } from 'bullmq';
+import Redis from 'ioredis';
 import {
   CredentialResolver,
+  FakeProviderAdapter,
   GeminiProviderAdapter,
   OpenAiProviderAdapter,
   PricingCatalog,
@@ -24,6 +27,8 @@ import { LlmQueueWorkerService } from './llm-queue-worker.service.js';
 import { GeminiOAuthRefreshService } from './gemini-oauth-refresh.service.js';
 import { LlmReconciliationSweeperService } from './llm-reconciliation-sweeper.service.js';
 import { LlmRecoveryQueueService } from './llm-recovery-queue.service.js';
+import { LlmWorkerOperationsService } from './llm-worker-operations.service.js';
+import { LLM_QUEUE_NAME } from './llm-worker.types.js';
 
 const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
 
@@ -56,6 +61,27 @@ const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
         prisma: PrismaClient,
       ) => {
         const env = loadRuntimeEnv(process.env);
+        if (env.LLM_PROVIDER_MODE === 'fake') {
+          return {
+            resolve: async (request: {
+              provider: LlmProvider;
+              mode: string;
+              connectionId: string | null;
+            }) => {
+              if (
+                request.provider !== 'FAKE' ||
+                request.mode !== 'PLATFORM_CREDITS' ||
+                request.connectionId !== null
+              ) {
+                throw new ProviderFailure('AUTHORIZATION_FAILED');
+              }
+              return Object.freeze({
+                mode: 'PLATFORM_CREDITS' as const,
+                value: 'local-provider-double',
+              });
+            },
+          } as unknown as CredentialResolver;
+        }
         if (!env.LLM_CREDENTIAL_MASTER_KEY) throw new Error('LLM_CREDENTIAL_MASTER_KEY_REQUIRED');
         const vault = new CredentialVault(
           env.LLM_CREDENTIAL_MASTER_KEY,
@@ -100,6 +126,7 @@ const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
         credentials: CredentialResolver,
         providers: Map<LlmProvider, LlmProviderAdapter>,
         pricing: PricingCatalog,
+        operations: LlmWorkerOperationsService,
       ) =>
         new LlmJobProcessor({
           store: repository,
@@ -115,19 +142,30 @@ const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
             },
           },
           pricing,
+          operations,
         }),
-      inject: [LlmJobRepository, CredentialResolver, PROVIDERS, PricingCatalog],
+      inject: [
+        LlmJobRepository,
+        CredentialResolver,
+        PROVIDERS,
+        PricingCatalog,
+        LlmWorkerOperationsService,
+      ],
     },
     {
       provide: LlmQueueWorkerService,
-      useFactory: (processor: LlmJobProcessor) => {
+      useFactory: (processor: LlmJobProcessor, operations: LlmWorkerOperationsService) => {
         const env = loadRuntimeEnv(process.env);
-        return new LlmQueueWorkerService(processor, {
-          redisUrl: env.REDIS_URL,
-          concurrency: env.WORKER_CONCURRENCY,
-        });
+        return new LlmQueueWorkerService(
+          processor,
+          {
+            redisUrl: env.REDIS_URL,
+            concurrency: env.WORKER_CONCURRENCY,
+          },
+          operations,
+        );
       },
-      inject: [LlmJobProcessor],
+      inject: [LlmJobProcessor, LlmWorkerOperationsService],
     },
     {
       provide: LlmRecoveryQueueService,
@@ -139,12 +177,65 @@ const PROVIDERS = Symbol('LLM_PROVIDER_ADAPTERS');
         new LlmReconciliationSweeperService(repository, queue),
       inject: [LlmJobRepository, LlmRecoveryQueueService],
     },
+    {
+      provide: LlmWorkerOperationsService,
+      useFactory: (prisma: PrismaClient, pricing: PricingCatalog) => {
+        const env = loadRuntimeEnv(process.env);
+        const redisUrl = new URL(env.REDIS_URL);
+        const connection = new Redis(env.REDIS_URL, {
+          lazyConnect: true,
+          enableOfflineQueue: false,
+          maxRetriesPerRequest: 1,
+          connectTimeout: 1_000,
+        });
+        connection.on('error', () => undefined);
+        const queue = new Queue(LLM_QUEUE_NAME, {
+          connection: {
+            host: redisUrl.hostname,
+            port: Number(redisUrl.port || 6379),
+            username: redisUrl.username || undefined,
+            password: redisUrl.password || undefined,
+            db: redisUrl.pathname.length > 1 ? Number(redisUrl.pathname.slice(1)) : 0,
+            ...(redisUrl.protocol === 'rediss:' ? { tls: {} } : {}),
+          },
+        });
+        return new LlmWorkerOperationsService({
+          database: async () => Boolean(await prisma.$queryRaw`SELECT 1`),
+          redis: async () => {
+            if (connection.status === 'wait') await connection.connect();
+            return (await connection.ping()) === 'PONG';
+          },
+          queue: async () => {
+            await queue.getJobCounts('waiting', 'active', 'delayed', 'failed');
+            return true;
+          },
+          publishHeartbeat: async (timestamp) => {
+            if (connection.status === 'wait') await connection.connect();
+            await connection.set('llm-worker:v1:heartbeat', String(timestamp), 'PX', 15_000);
+          },
+          publishSnapshot: async (metrics) => {
+            if (connection.status === 'wait') await connection.connect();
+            await connection.set('llm-worker:v1:metrics', metrics, 'PX', 15_000);
+          },
+          configuration: () => Boolean(pricing),
+          close: async () => {
+            await queue.close();
+            if (connection.status !== 'end')
+              await connection.quit().catch(() => connection.disconnect());
+          },
+        });
+      },
+      inject: [PrismaClient, PricingCatalog],
+    },
   ],
 })
 export class LlmWorkerModule {}
 
 function createWorkerProviderRegistry(envInput: NodeJS.ProcessEnv): ProviderRegistry {
   const env = loadRuntimeEnv(envInput);
+  if (env.LLM_PROVIDER_MODE === 'fake') {
+    return new ProviderRegistry([fakeCapabilities(env)], { allowTestProvider: true });
+  }
   return new ProviderRegistry([openAiCapabilities(env), geminiCapabilities(env)]);
 }
 
@@ -160,10 +251,15 @@ export function createPricingCatalog(env: NodeJS.ProcessEnv): PricingCatalog {
   if (!Array.isArray(entries)) throw new Error('LLM_PRICING_CATALOG_INVALID');
   const catalog = new PricingCatalog(env.LLM_PRICING_VERSION?.trim() || 'unconfigured-v1', entries);
   const runtime = loadRuntimeEnv(env);
-  for (const [provider, models] of [
-    ['OPENAI', runtime.LLM_OPENAI_MODEL_ALLOWLIST],
-    ['GEMINI', runtime.LLM_GEMINI_MODEL_ALLOWLIST],
-  ] as const) {
+  const required = !runtime.LLM_PROMPT_GENERATION_ENABLED
+    ? ([] as const)
+    : runtime.LLM_PROVIDER_MODE === 'fake'
+      ? ([['FAKE', ['fake-deterministic-v1']]] as const)
+      : ([
+          ['OPENAI', runtime.LLM_OPENAI_MODEL_ALLOWLIST],
+          ['GEMINI', runtime.LLM_GEMINI_MODEL_ALLOWLIST],
+        ] as const);
+  for (const [provider, models] of required) {
     if (models.some((model) => !catalog.has(provider, model)))
       throw new Error('LLM_PRICING_CATALOG_INCOMPLETE');
   }
@@ -180,6 +276,19 @@ function createAdapters(
     timeoutMs: env.LLM_TIMEOUT_MS,
     maxOutputCharacters: 100_000,
   };
+  if (env.LLM_PROVIDER_MODE === 'fake') {
+    return new Map<LlmProvider, LlmProviderAdapter>([
+      [
+        'FAKE',
+        new FakeProviderAdapter({
+          allowTestProvider: true,
+          capabilities: registry.get('FAKE'),
+          content:
+            'Prompt de teste determinístico. Defina o objetivo, preserve as evidências e produza uma saída clara em linguagem natural.',
+        }),
+      ],
+    ]);
+  }
   return new Map<LlmProvider, LlmProviderAdapter>([
     [
       'OPENAI',
@@ -213,7 +322,24 @@ function openAiCapabilities(env: ReturnType<typeof loadRuntimeEnv>): ProviderCap
     oauthScopes: Object.freeze([]),
     previewEligible: true,
     pricingMetadataVersion: 'configured-2026-07-17',
-    enabled: true,
+    enabled: env.LLM_PROMPT_GENERATION_ENABLED && env.LLM_PROVIDER_OPENAI_ENABLED,
+    circuitBreakerOpen: false,
+  });
+}
+function fakeCapabilities(env: ReturnType<typeof loadRuntimeEnv>): ProviderCapabilities {
+  return Object.freeze({
+    provider: 'FAKE',
+    credentialModes: Object.freeze(['PLATFORM_CREDITS'] as const),
+    models: Object.freeze(['fake-deterministic-v1']),
+    contextWindowTokens: env.LLM_MAX_INPUT_TOKENS,
+    maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
+    supportsStructuredOutput: false,
+    supportsCancellation: false,
+    supportsCredentialRefresh: false,
+    oauthScopes: Object.freeze([]),
+    previewEligible: true,
+    pricingMetadataVersion: env.LLM_PRICING_VERSION,
+    enabled: env.LLM_PROMPT_GENERATION_ENABLED,
     circuitBreakerOpen: false,
   });
 }
@@ -230,7 +356,7 @@ function geminiCapabilities(env: ReturnType<typeof loadRuntimeEnv>): ProviderCap
     oauthScopes: Object.freeze(['https://www.googleapis.com/auth/cloud-platform']),
     previewEligible: true,
     pricingMetadataVersion: 'configured-2026-07-17',
-    enabled: true,
+    enabled: env.LLM_PROMPT_GENERATION_ENABLED && env.LLM_PROVIDER_GEMINI_ENABLED,
     circuitBreakerOpen: false,
   });
 }

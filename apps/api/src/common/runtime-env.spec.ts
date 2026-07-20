@@ -6,6 +6,7 @@ const validMasterKey = Buffer.alloc(32, 7).toString('base64');
 
 const productionBase = {
   NODE_ENV: 'production',
+  LLM_PROVIDER_MODE: 'live',
   AUTH0_DOMAIN: 'tenant.eu.auth0.com',
   AUTH0_AUDIENCE: 'https://api.extractionstack.example',
   CORS_ORIGIN: 'https://app.extractionstack.example',
@@ -13,6 +14,7 @@ const productionBase = {
   REDIS_URL: 'redis://redis:6379',
   LLM_CREDENTIAL_MASTER_KEY: validMasterKey,
   LLM_CREDENTIAL_KEY_VERSION: 'production-v1',
+  LLM_RATE_LIMIT_HMAC_KEY: 'production-rate-limit-key-with-32-bytes',
   LLM_OPENAI_BASE_URL: 'https://api.openai.com/v1',
   LLM_GEMINI_BASE_URL: 'https://generativelanguage.googleapis.com/v1beta',
   LLM_OPENAI_MODEL_ALLOWLIST: 'gpt-5-mini,gpt-5',
@@ -35,6 +37,8 @@ describe('loadRuntimeEnv', () => {
     expect(env.AUTH_DEV_MODE).toBe(true);
     expect(env.LLM_TIMEOUT_MS).toBe(30_000);
     expect(env.LLM_OPENAI_MODEL_ALLOWLIST).toEqual(['gpt-5-mini']);
+    expect(env.API_TRUST_PROXY).toBe('false');
+    expect(env.LLM_PROVIDER_MODE).toBe('fake');
   });
 
   it.each([
@@ -51,7 +55,7 @@ describe('loadRuntimeEnv', () => {
     expect(loadRuntimeEnv(productionBase).NODE_ENV).toBe('production');
   });
 
-  it('keeps the master key accessible but absent from serialization and enumeration', () => {
+  it('keeps operational secrets accessible but absent from serialization and enumeration', () => {
     const env = loadRuntimeEnv(productionBase);
 
     expect(env.LLM_CREDENTIAL_MASTER_KEY).toBe(validMasterKey);
@@ -60,6 +64,9 @@ describe('loadRuntimeEnv', () => {
     expect(Object.keys(env)).not.toContain('LLM_CREDENTIAL_MASTER_KEY');
     expect(Object.values(env)).not.toContain(validMasterKey);
     expect(inspect(env)).not.toContain(validMasterKey);
+    expect(env.LLM_RATE_LIMIT_HMAC_KEY).toBe('production-rate-limit-key-with-32-bytes');
+    expect(JSON.stringify(env)).not.toContain('production-rate-limit-key-with-32-bytes');
+    expect(Object.keys(env)).not.toContain('LLM_RATE_LIMIT_HMAC_KEY');
   });
 
   it('never includes a rejected master key in validation errors', () => {
@@ -120,6 +127,14 @@ describe('loadRuntimeEnv', () => {
     expect(env.LLM_GEMINI_MODEL_ALLOWLIST).toEqual(['gemini-2.5-flash']);
   });
 
+  it('allows only bounded private proxy CIDRs or safe hop presets', () => {
+    expect(loadRuntimeEnv({ API_TRUST_PROXY: '10.0.0.0/8, fd00::/8' }).API_TRUST_PROXY).toBe(
+      '10.0.0.0/8, fd00::/8',
+    );
+    expect(loadRuntimeEnv({ API_TRUST_PROXY: '1' }).API_TRUST_PROXY).toBe('1');
+    expect(() => loadRuntimeEnv({ API_TRUST_PROXY: '198.51.100.0/24' })).toThrow();
+  });
+
   it.each([
     { LLM_OPENAI_BASE_URL: 'http://api.openai.invalid/v1' },
     { LLM_GEMINI_BASE_URL: 'not-a-url' },
@@ -129,6 +144,9 @@ describe('loadRuntimeEnv', () => {
     { LLM_MAX_OUTPUT_TOKENS: '1000001' },
     { LLM_MAX_COST_MINOR_UNITS: '-1' },
     { LLM_PRICING_CATALOG_JSON: ' '.repeat(65_537) },
+    { LLM_RATE_LIMIT_HMAC_KEY: 'short' },
+    { API_TRUST_PROXY: '3' },
+    { API_TRUST_PROXY: '0.0.0.0/0' },
   ])('rejects unsafe LLM runtime configuration', (patch) => {
     expect(() => loadRuntimeEnv({ ...productionBase, ...patch })).toThrow();
   });

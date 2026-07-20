@@ -9,6 +9,7 @@ import { OperationsModule } from './operations/operations.module.js';
 import { AiConnectionsModule } from './ai-connections/ai-connections.module.js';
 import { CreditsModule } from './credits/credits.module.js';
 import { PromptProjectsModule } from './prompt-projects/prompt-projects.module.js';
+import { LlmRateLimitModule } from './common/llm-rate-limit.module.js';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { PromptProjectsModule } from './prompt-projects/prompt-projects.module.j
         limit: Number(process.env.THROTTLE_LIMIT ?? 10),
       },
     ]),
+    LlmRateLimitModule,
     PrismaModule,
     AuthModule,
     ExtractionsModule,

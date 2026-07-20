@@ -97,6 +97,7 @@ The files above are focused by responsibility. Provider-independent rules live o
 ### Task 1: Shared Provider and Prompt Contracts
 
 **Files:**
+
 - Create: `packages/shared/src/schemas/ai-connections.ts`
 - Create: `packages/shared/src/schemas/prompt-projects.ts`
 - Create: `packages/shared/src/schemas/prompt-projects.spec.ts`
@@ -104,6 +105,7 @@ The files above are focused by responsibility. Provider-independent rules live o
 - Modify: `packages/shared/src/index.ts`
 
 **Interfaces:**
+
 - Produces: `LlmProviderSchema`, `CredentialModeSchema`, `AiConnectionSchema`, `PromptWizardInputSchema`, `PromptProjectSchema`, `PromptVersionSchema`, `PromptGenerationJobSchema`, `PromptPreviewSchema`, and `PromptJobStatusSchema`.
 - Public result fields use `content: string`, `summary: string`, and `message: string`; no public field exposes provider response JSON.
 
@@ -116,32 +118,36 @@ import { PromptPreviewSchema, PromptWizardInputSchema } from './prompt-projects.
 
 describe('LLM public contracts', () => {
   it('rejects unknown wizard keys and oversized instructions', () => {
-    expect(() => PromptWizardInputSchema.parse({
-      extractionId: 'cm1234567890abcdef',
-      category: 'application',
-      objective: 'Criar uma aplicação semelhante sem copiar código.',
-      audience: 'Desenvolvedores',
-      technologies: ['React'],
-      exclusions: [],
-      requirements: ['Acessível'],
-      language: 'pt-BR',
-      detail: 'complete',
-      destination: 'universal',
-      freeInstructions: 'x'.repeat(8_001),
-      unknown: true,
-    })).toThrow();
+    expect(() =>
+      PromptWizardInputSchema.parse({
+        extractionId: 'cm1234567890abcdef',
+        category: 'application',
+        objective: 'Criar uma aplicação semelhante sem copiar código.',
+        audience: 'Desenvolvedores',
+        technologies: ['React'],
+        exclusions: [],
+        requirements: ['Acessível'],
+        language: 'pt-BR',
+        detail: 'complete',
+        destination: 'universal',
+        freeInstructions: 'x'.repeat(8_001),
+        unknown: true,
+      }),
+    ).toThrow();
   });
 
   it('never accepts a raw provider payload in a public preview', () => {
-    expect(() => PromptPreviewSchema.parse({
-      id: 'cm1234567890abcdef',
-      promptVersionId: 'cm2234567890abcdef',
-      status: 'SUCCEEDED',
-      content: 'Prévia em linguagem natural.',
-      provider: 'OPENAI',
-      model: 'configured-model',
-      rawResponse: { secret: true },
-    })).toThrow();
+    expect(() =>
+      PromptPreviewSchema.parse({
+        id: 'cm1234567890abcdef',
+        promptVersionId: 'cm2234567890abcdef',
+        status: 'SUCCEEDED',
+        content: 'Prévia em linguagem natural.',
+        provider: 'OPENAI',
+        model: 'configured-model',
+        rawResponse: { secret: true },
+      }),
+    ).toThrow();
   });
 
   it('never returns credential material', () => {
@@ -164,21 +170,48 @@ export const LlmProviderSchema = z.enum(['FAKE', 'OPENAI', 'GEMINI']);
 export const CredentialModeSchema = z.enum(['OAUTH', 'API_KEY', 'PLATFORM_CREDITS']);
 export const PublicIdSchema = z.string().cuid().max(64);
 export const PromptJobStatusSchema = z.enum([
-  'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCEL_REQUESTED', 'CANCELLED',
+  'QUEUED',
+  'RUNNING',
+  'SUCCEEDED',
+  'FAILED',
+  'CANCEL_REQUESTED',
+  'CANCELLED',
 ]);
-export const PromptWizardInputSchema = z.object({
-  extractionId: PublicIdSchema,
-  category: z.enum(['application', 'landing_page', 'frontend', 'backend', 'api', 'design_system', 'documentation', 'tests', 'content', 'custom']),
-  objective: z.string().trim().min(10).max(2_000),
-  audience: z.string().trim().min(2).max(500),
-  technologies: z.array(z.string().trim().min(1).max(80)).max(30),
-  exclusions: z.array(z.string().trim().min(1).max(200)).max(30),
-  requirements: z.array(z.string().trim().min(1).max(500)).max(50),
-  language: z.enum(['pt-BR', 'en-US', 'es-ES']),
-  detail: z.enum(['concise', 'balanced', 'complete']),
-  destination: z.enum(['universal', 'codex', 'chatgpt', 'claude', 'gemini', 'cursor', 'lovable', 'bolt']),
-  freeInstructions: z.string().trim().max(8_000).default(''),
-}).strict();
+export const PromptWizardInputSchema = z
+  .object({
+    extractionId: PublicIdSchema,
+    category: z.enum([
+      'application',
+      'landing_page',
+      'frontend',
+      'backend',
+      'api',
+      'design_system',
+      'documentation',
+      'tests',
+      'content',
+      'custom',
+    ]),
+    objective: z.string().trim().min(10).max(2_000),
+    audience: z.string().trim().min(2).max(500),
+    technologies: z.array(z.string().trim().min(1).max(80)).max(30),
+    exclusions: z.array(z.string().trim().min(1).max(200)).max(30),
+    requirements: z.array(z.string().trim().min(1).max(500)).max(50),
+    language: z.enum(['pt-BR', 'en-US', 'es-ES']),
+    detail: z.enum(['concise', 'balanced', 'complete']),
+    destination: z.enum([
+      'universal',
+      'codex',
+      'chatgpt',
+      'claude',
+      'gemini',
+      'cursor',
+      'lovable',
+      'bolt',
+    ]),
+    freeInstructions: z.string().trim().max(8_000).default(''),
+  })
+  .strict();
 ```
 
 Define all response schemas with `.strict()`, bounded strings/arrays, ISO timestamps, nullable fields explicitly represented, and discriminated job status. Export both schemas and `z.infer` types from the shared package.
@@ -201,11 +234,13 @@ git commit -m "feat: add prompt generation contracts"
 ### Task 2: Prisma Domain Model and Migration
 
 **Files:**
+
 - Modify: `apps/api/prisma/schema.prisma`
 - Create: `apps/api/prisma/migrations/20260716120000_add_llm_prompt_generation/migration.sql`
 - Create: `apps/api/src/prompt-projects/prompt-persistence.spec.ts`
 
 **Interfaces:**
+
 - Consumes: enums and public naming from Task 1.
 - Produces: Prisma models `AiConnection`, `ProviderCredential`, `PromptProject`, `PromptVersion`, `PromptGenerationJob`, `PromptPreview`, `LlmUsage`, `SecurityDecision`, and `CreditLedgerEntry`.
 
@@ -299,6 +334,7 @@ git commit -m "feat: add LLM prompt persistence model"
 ### Task 3: LLM Core Package and Provider Contract
 
 **Files:**
+
 - Create: `packages/llm-core/package.json`
 - Create: `packages/llm-core/tsconfig.json`
 - Create: `packages/llm-core/vitest.config.ts`
@@ -309,6 +345,7 @@ git commit -m "feat: add LLM prompt persistence model"
 - Create: `packages/llm-core/src/providers/provider-registry.spec.ts`
 
 **Interfaces:**
+
 - Consumes: provider, credential-mode, wizard, prompt, and preview types from Task 1.
 - Produces: `LlmProviderAdapter`, `ProviderCapabilities`, `ProviderRegistry`, `NormalizedGeneration`, `NormalizedUsage`, and `ProviderFailure`.
 
@@ -320,13 +357,13 @@ it('does not advertise OpenAI OAuth', () => {
 });
 
 it('advertises all approved Gemini modes', () => {
-  expect(registry.get('GEMINI').credentialModes).toEqual([
-    'OAUTH', 'API_KEY', 'PLATFORM_CREDITS',
-  ]);
+  expect(registry.get('GEMINI').credentialModes).toEqual(['OAUTH', 'API_KEY', 'PLATFORM_CREDITS']);
 });
 
 it('rejects a model outside configured capabilities', () => {
-  expect(() => registry.assertModel('OPENAI', 'user-controlled-model')).toThrow('MODEL_UNAVAILABLE');
+  expect(() => registry.assertModel('OPENAI', 'user-controlled-model')).toThrow(
+    'MODEL_UNAVAILABLE',
+  );
 });
 ```
 
@@ -377,6 +414,7 @@ git commit -m "feat: define provider adapter core"
 ### Task 4: Safe Report Narrative and Prompt Composition
 
 **Files:**
+
 - Create: `packages/llm-core/src/narrative/report-narrative-assembler.ts`
 - Create: `packages/llm-core/src/narrative/report-narrative-assembler.spec.ts`
 - Create: `packages/llm-core/src/safety/prompt-safety.service.ts`
@@ -386,6 +424,7 @@ git commit -m "feat: define provider adapter core"
 - Modify: `packages/llm-core/src/index.ts`
 
 **Interfaces:**
+
 - Consumes: `InvestigationReport`, `PromptWizardInput`.
 - Produces: `ReportNarrativeAssembler.assemble(report): SafeSourceBrief`, `PromptSafetyService.inspect(input): SafetyInspection`, and `PromptComposer.compose(input): GenerationInput`.
 
@@ -405,13 +444,15 @@ it('treats extracted instructions as inert evidence', () => {
 });
 
 it('preserves not-identified as uncertainty', () => {
-  expect(assembler.assemble(notIdentifiedDatabaseReport).narrative)
-    .toContain('Banco de dados não identificado');
+  expect(assembler.assemble(notIdentifiedDatabaseReport).narrative).toContain(
+    'Banco de dados não identificado',
+  );
 });
 
 it('redacts authorization and secret-like query values', () => {
-  expect(assembler.assemble(secretBearingReport).narrative)
-    .not.toMatch(/Bearer |api_key=|password=/i);
+  expect(assembler.assemble(secretBearingReport).narrative).not.toMatch(
+    /Bearer |api_key=|password=/i,
+  );
 });
 ```
 
@@ -468,6 +509,7 @@ git commit -m "feat: build injection-safe prompt context"
 ### Task 5: Credential Vault and Runtime Configuration
 
 **Files:**
+
 - Modify: `apps/api/src/common/runtime-env.ts`
 - Modify: `apps/api/src/common/runtime-env.spec.ts`
 - Create: `apps/api/src/ai-connections/credential-vault.ts`
@@ -475,6 +517,7 @@ git commit -m "feat: build injection-safe prompt context"
 - Modify: `.env.example`
 
 **Interfaces:**
+
 - Produces: `CredentialVault.encrypt(ownerId, provider, plaintext): CredentialEnvelope` and `CredentialVault.decrypt(ownerId, provider, envelope): SensitiveString`.
 - Runtime variables: `LLM_CREDENTIAL_MASTER_KEY`, `LLM_CREDENTIAL_KEY_VERSION`, provider base URLs, configured model allowlists, timeout, token, and cost ceilings.
 
@@ -542,6 +585,7 @@ git commit -m "feat: encrypt provider credentials"
 ### Task 6: Provider Adapters and Deterministic Fake
 
 **Files:**
+
 - Create: `packages/llm-core/src/providers/fake-provider.adapter.ts`
 - Create: `packages/llm-core/src/providers/openai-provider.adapter.ts`
 - Create: `packages/llm-core/src/providers/gemini-provider.adapter.ts`
@@ -549,6 +593,7 @@ git commit -m "feat: encrypt provider credentials"
 - Modify: `packages/llm-core/src/index.ts`
 
 **Interfaces:**
+
 - Consumes: `LlmProviderAdapter`, composed prompt layers, resolved bearer/API credentials.
 - Produces: provider adapters returning only `NormalizedGeneration` or classified `ProviderFailure`.
 
@@ -559,15 +604,14 @@ function providerContract(create: () => LlmProviderAdapter): void {
   it('returns bounded natural-language content and normalized usage', async () => {
     const result = await create().generatePrompt(generationFixture());
     expect(result.content).toBe('Prompt universal de teste.');
-    expect(result.usage.totalTokens).toBe(
-      result.usage.inputTokens + result.usage.outputTokens,
-    );
+    expect(result.usage.totalTokens).toBe(result.usage.inputTokens + result.usage.outputTokens);
     expect(JSON.stringify(result)).not.toContain('test-secret');
   });
 
   it('classifies 429 as transient without leaking the response body', async () => {
-    await expect(createRateLimitedAdapter().generatePrompt(generationFixture()))
-      .rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true });
+    await expect(
+      createRateLimitedAdapter().generatePrompt(generationFixture()),
+    ).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true });
   });
 }
 ```
@@ -613,6 +657,7 @@ git commit -m "feat: add LLM provider adapters"
 ### Task 7: AI Connections API and Gemini OAuth
 
 **Files:**
+
 - Create: `apps/api/src/ai-connections/ai-connections.module.ts`
 - Create: `apps/api/src/ai-connections/ai-connections.controller.ts`
 - Create: `apps/api/src/ai-connections/ai-connections.service.ts`
@@ -623,6 +668,7 @@ git commit -m "feat: add LLM provider adapters"
 - Modify: `apps/api/src/app.module.ts`
 
 **Interfaces:**
+
 - Consumes: Task 1 contracts, Task 3 registry, Task 5 vault, Task 6 connection validation.
 - Produces: connection endpoints defined in the spec and an internal `CredentialReference` consumed by Task 10.
 
@@ -631,7 +677,9 @@ git commit -m "feat: add LLM provider adapters"
 ```ts
 it('returns connection metadata but never the submitted key', async () => {
   const result = await service.addApiKey(actor, {
-    provider: 'OPENAI', label: 'Minha chave', apiKey: 'sk-test-secret',
+    provider: 'OPENAI',
+    label: 'Minha chave',
+    apiKey: 'sk-test-secret',
   });
   expect(result.maskedSuffix).toBe('…cret');
   expect(JSON.stringify(result)).not.toContain('sk-test-secret');
@@ -640,13 +688,15 @@ it('returns connection metadata but never the submitted key', async () => {
 it('rejects a second use of the same OAuth state', async () => {
   const started = await service.startOAuth(actor, 'GEMINI', callbackUrl);
   await service.finishOAuth(started.state, 'authorization-code');
-  await expect(service.finishOAuth(started.state, 'authorization-code'))
-    .rejects.toMatchObject({ response: { code: 'OAUTH_STATE_INVALID' } });
+  await expect(service.finishOAuth(started.state, 'authorization-code')).rejects.toMatchObject({
+    response: { code: 'OAUTH_STATE_INVALID' },
+  });
 });
 
 it('returns not found for another owner connection', async () => {
-  await expect(service.remove(otherActor, ownedConnectionId))
-    .rejects.toMatchObject({ status: 404 });
+  await expect(service.remove(otherActor, ownedConnectionId)).rejects.toMatchObject({
+    status: 404,
+  });
 });
 ```
 
@@ -691,6 +741,7 @@ git commit -m "feat: add secure provider connections"
 ### Task 8: Idempotent Credit Ledger
 
 **Files:**
+
 - Create: `apps/api/src/credits/credits.module.ts`
 - Create: `apps/api/src/credits/credits.repository.ts`
 - Create: `apps/api/src/credits/credits.service.ts`
@@ -698,6 +749,7 @@ git commit -m "feat: add secure provider connections"
 - Modify: `apps/api/src/app.module.ts`
 
 **Interfaces:**
+
 - Produces: `reserve(ownerId, jobId, amount, idempotencyKey)`, `confirm(reservationId, actualAmount)`, `reverse(reservationId, reason)`, and `getAvailableBalance(ownerId)`.
 - Ledger amounts are signed `bigint` minor units; public amounts are decimal strings.
 
@@ -717,8 +769,9 @@ it('cannot confirm a reservation twice', async () => {
 });
 
 it('rejects a reservation larger than the available balance', async () => {
-  await expect(service.reserve(ownerId, jobId, 10_001n, 'reserve:too-large'))
-    .rejects.toThrow('INSUFFICIENT_CREDITS');
+  await expect(service.reserve(ownerId, jobId, 10_001n, 'reserve:too-large')).rejects.toThrow(
+    'INSUFFICIENT_CREDITS',
+  );
 });
 ```
 
@@ -758,6 +811,7 @@ git commit -m "feat: add idempotent credit ledger"
 ### Task 9: Prompt Project API and Dedicated Queue
 
 **Files:**
+
 - Create: `apps/api/src/prompt-projects/prompt-projects.module.ts`
 - Create: `apps/api/src/prompt-projects/prompt-projects.controller.ts`
 - Create: `apps/api/src/prompt-projects/prompt-projects.service.ts`
@@ -768,6 +822,7 @@ git commit -m "feat: add idempotent credit ledger"
 - Modify: `apps/api/src/app.module.ts`
 
 **Interfaces:**
+
 - Consumes: shared prompt contracts, extraction ownership, provider registry, connections, credits.
 - Produces: project, generation, adaptation, preview, job-read, and cancellation endpoints; queue payload `{ jobId: string }` on `llm-generations-v1`.
 
@@ -775,8 +830,9 @@ git commit -m "feat: add idempotent credit ledger"
 
 ```ts
 it('cannot create a project from another user extraction', async () => {
-  await expect(service.create(otherActor, wizardFixture(ownedExtractionId)))
-    .rejects.toMatchObject({ status: 404 });
+  await expect(service.create(otherActor, wizardFixture(ownedExtractionId))).rejects.toMatchObject({
+    status: 404,
+  });
 });
 
 it('reuses the job for a repeated generation idempotency key', async () => {
@@ -786,10 +842,20 @@ it('reuses the job for a repeated generation idempotency key', async () => {
 });
 
 it('requires explicit consent for platform credits', async () => {
-  await expect(service.preview(actor, versionId, {
-    provider: 'OPENAI', model: 'configured-model', credentialMode: 'PLATFORM_CREDITS',
-    acceptPlatformCharge: false, maximumCostMinor: '100',
-  }, 'preview:key')).rejects.toThrow('COST_CONSENT_REQUIRED');
+  await expect(
+    service.preview(
+      actor,
+      versionId,
+      {
+        provider: 'OPENAI',
+        model: 'configured-model',
+        credentialMode: 'PLATFORM_CREDITS',
+        acceptPlatformCharge: false,
+        maximumCostMinor: '100',
+      },
+      'preview:key',
+    ),
+  ).rejects.toThrow('COST_CONSENT_REQUIRED');
 });
 ```
 
@@ -805,15 +871,21 @@ Create project, generation, adaptation, preview, read, list, and cancel operatio
 
 ```ts
 export const LLM_QUEUE_NAME = 'llm-generations-v1';
-export interface LlmQueuePayload { jobId: string }
+export interface LlmQueuePayload {
+  jobId: string;
+}
 
-await this.queue.add(LLM_QUEUE_NAME, { jobId }, {
-  jobId,
-  attempts: 3,
-  backoff: { type: 'exponential', delay: 1_000 },
-  removeOnComplete: { age: 3_600, count: 1_000 },
-  removeOnFail: false,
-});
+await this.queue.add(
+  LLM_QUEUE_NAME,
+  { jobId },
+  {
+    jobId,
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1_000 },
+    removeOnComplete: { age: 3_600, count: 1_000 },
+    removeOnFail: false,
+  },
+);
 ```
 
 - [ ] **Step 4: Run prompt API and queue tests**
@@ -834,6 +906,7 @@ git commit -m "feat: add prompt project API and queue"
 ### Task 10: Dedicated LLM Worker and Credential Resolution
 
 **Files:**
+
 - Create: `apps/llm-worker/package.json`
 - Create: `apps/llm-worker/tsconfig.json`
 - Create: `apps/llm-worker/tsconfig.build.json`
@@ -849,6 +922,7 @@ git commit -m "feat: add prompt project API and queue"
 - Create: `packages/llm-core/src/runtime/credential-resolver.spec.ts`
 
 **Interfaces:**
+
 - Consumes: queue payload, prompt job state, report assembler, safety service, composer, adapters, encrypted credentials, credits.
 - Produces: immutable version/preview, usage, security decision, terminal job state, and financial confirmation/reversal.
 
@@ -857,9 +931,11 @@ git commit -m "feat: add prompt project API and queue"
 ```ts
 it('persists natural language and confirms credits exactly once', async () => {
   await processor.process(jobId, 1, 3);
-  expect(store.complete).toHaveBeenCalledWith(expect.objectContaining({
-    content: 'Prompt universal de teste.',
-  }));
+  expect(store.complete).toHaveBeenCalledWith(
+    expect.objectContaining({
+      content: 'Prompt universal de teste.',
+    }),
+  );
   expect(credits.confirm).toHaveBeenCalledTimes(1);
 });
 
@@ -930,6 +1006,7 @@ git commit -m "feat: process LLM jobs in dedicated worker"
 ### Task 11: Public Errors, Rate Limits, Metrics, and Security Gates
 
 **Files:**
+
 - Modify: `apps/api/src/common/http-exception.filter.ts`
 - Modify: `apps/api/src/common/http-exception.filter.spec.ts`
 - Modify: `apps/api/src/common/security-guardrails.ts`
@@ -942,6 +1019,7 @@ git commit -m "feat: process LLM jobs in dedicated worker"
 - Create: `apps/llm-worker/src/llm-worker-operations.spec.ts`
 
 **Interfaces:**
+
 - Consumes: stable LLM error categories and job/usage/security state.
 - Produces: natural-language public errors, bounded rate-limit decisions, Prometheus metrics, and API/worker readiness.
 
@@ -1008,6 +1086,7 @@ git commit -m "feat: harden LLM operations and errors"
 ### Task 12: Connection Management Frontend
 
 **Files:**
+
 - Create: `apps/web/src/features/ai-connections/AiConnectionsPage.tsx`
 - Create: `apps/web/src/features/ai-connections/ApiKeyConnectionForm.tsx`
 - Create: `apps/web/src/features/ai-connections/useAiConnectionsApi.ts`
@@ -1017,6 +1096,7 @@ git commit -m "feat: harden LLM operations and errors"
 - Modify: `apps/web/src/index.css`
 
 **Interfaces:**
+
 - Consumes: public provider/connection schemas and connection endpoints.
 - Produces: `/settings/ai-connections`, API-key form, Gemini OAuth initiation, connection validation, masking, and revocation UI.
 
@@ -1077,6 +1157,7 @@ git commit -m "feat: add AI connection settings"
 ### Task 13: Prompt Wizard, Review, Workspace, and Natural-Language UI
 
 **Files:**
+
 - Create: `apps/web/src/features/prompt-generation/prompt-wizard-state.ts`
 - Create: `apps/web/src/features/prompt-generation/usePromptApi.ts`
 - Create: `apps/web/src/features/prompt-generation/PromptWizardPage.tsx`
@@ -1089,6 +1170,7 @@ git commit -m "feat: add AI connection settings"
 - Modify: `apps/web/src/index.css`
 
 **Interfaces:**
+
 - Consumes: wizard/project/job/version/preview shared schemas and prompt endpoints.
 - Produces: `/extractions/:id/prompts/new` and `/prompt-projects/:id`, with draft state, review/consent, polling, version history, adaptations, preview, copy, and Markdown/text export.
 
@@ -1156,36 +1238,41 @@ git commit -m "feat: add prompt wizard and workspace"
 ### Task 14: API Integration and Security Regression Suite
 
 **Files:**
+
 - Create: `apps/api/test/prompt-generation.e2e-spec.ts`
 - Create: `apps/api/test/prompt-security.e2e-spec.ts`
 - Modify: `apps/api/vitest.e2e.config.ts`
 - Modify: `apps/api/tsconfig.e2e.json`
 
 **Interfaces:**
+
 - Exercises the actual Nest validation, guards, services, repositories, PostgreSQL, Redis, fake provider, queue, and worker-facing state transitions.
 
 - [ ] **Step 1: Add failing end-to-end API scenarios**
 
 ```ts
-it.each([
-  "' OR 1=1 --",
-  "'; DROP TABLE \"PromptProject\"; --",
-  '${jndi:ldap://127.0.0.1/a}',
-])('keeps injection payload inert: %s', async (payload) => {
-  await request(app.getHttpServer())
-    .post(`/api/prompt-projects/${projectId}/generations`)
-    .set(authHeader(owner))
-    .set('Idempotency-Key', `security:${hash(payload)}`)
-    .send({ ...generationRequest, freeInstructions: payload })
-    .expect(202);
-  await expectProjectCountToRemain(1);
-});
+it.each(["' OR 1=1 --", '\'; DROP TABLE "PromptProject"; --', '${jndi:ldap://127.0.0.1/a}'])(
+  'keeps injection payload inert: %s',
+  async (payload) => {
+    await request(app.getHttpServer())
+      .post(`/api/prompt-projects/${projectId}/generations`)
+      .set(authHeader(owner))
+      .set('Idempotency-Key', `security:${hash(payload)}`)
+      .send({ ...generationRequest, freeInstructions: payload })
+      .expect(202);
+    await expectProjectCountToRemain(1);
+  },
+);
 
 it('hides another owner project and connection', async () => {
-  await request(server).get(`/api/prompt-projects/${ownerProjectId}`)
-    .set(authHeader(otherOwner)).expect(404);
-  await request(server).delete(`/api/ai/connections/${ownerConnectionId}`)
-    .set(authHeader(otherOwner)).expect(404);
+  await request(server)
+    .get(`/api/prompt-projects/${ownerProjectId}`)
+    .set(authHeader(otherOwner))
+    .expect(404);
+  await request(server)
+    .delete(`/api/ai/connections/${ownerConnectionId}`)
+    .set(authHeader(otherOwner))
+    .expect(404);
 });
 
 it('keeps extracted prompt injection in the data layer', async () => {
@@ -1225,11 +1312,13 @@ git commit -m "test: cover prompt API and security boundaries"
 ### Task 15: Browser E2E for Prompt Generation
 
 **Files:**
+
 - Create: `e2e/prompt-generation-flow.spec.ts`
 - Create: `e2e/prompt-security.spec.ts`
 - Modify: `playwright.config.ts`
 
 **Interfaces:**
+
 - Consumes: finished web routes and shared public API contracts.
 - Produces: browser proof for wizard, provider modes, natural-language output, versions, error recovery, accessibility, and secret absence.
 
@@ -1288,6 +1377,7 @@ git commit -m "test: cover prompt generation browser flows"
 ### Task 16: Deployment, CI, Operations, and Documentation
 
 **Files:**
+
 - Modify: `package.json`
 - Modify: `Dockerfile`
 - Modify: `docker-compose.yml`
@@ -1304,6 +1394,7 @@ git commit -m "test: cover prompt generation browser flows"
 - Create: `ops/prometheus/llm-alerts.yml`
 
 **Interfaces:**
+
 - Produces: local `llm-worker` service, root scripts, CI gates, provider-double defaults, dashboards/alerts/runbooks, and release documentation.
 
 - [ ] **Step 1: Write failing runtime/deployment assertions**
@@ -1336,6 +1427,7 @@ Document:
 - retention/deletion policy;
 - metrics, SLOs, alerts, feature flags, provider kill switches, backup, restore, rollback, and pilot rollout;
 - security control-to-test matrix covering SQL injection, prompt injection, XSS, IDOR, CSRF/OAuth, secrets, abuse, SSRF-as-data, and duplicate charging.
+- topology-specific `API_TRUST_PROXY` guidance: keep `false` for direct exposure; configure only exact private ingress CIDRs or a verified hop count behind the documented reverse proxy. Never default Docker or direct API exposure to `1`, because an untrusted direct client could spoof forwarded addresses.
 
 - [ ] **Step 4: Run the complete verification matrix**
 

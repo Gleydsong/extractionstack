@@ -12,6 +12,12 @@ async function bootstrap(): Promise<void> {
   const env = loadRuntimeEnv(process.env);
   const app = await NestFactory.create(AppModule, { bufferLogs: true, bodyParser: false });
   app.enableShutdownHooks();
+  if (env.API_TRUST_PROXY !== 'false') {
+    const trustProxy = /^\d+$/.test(env.API_TRUST_PROXY)
+      ? Number(env.API_TRUST_PROXY)
+      : env.API_TRUST_PROXY;
+    app.getHttpAdapter().getInstance().set('trust proxy', trustProxy);
+  }
 
   app.use(requestIdMiddleware);
   app.use(createRequestLogger());

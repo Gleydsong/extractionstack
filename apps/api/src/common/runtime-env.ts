@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isCanonicalCredentialMasterKey } from './credential-master-key.js';
+import * as ipaddr from 'ipaddr.js';
 
 const booleanString = z
   .enum(['true', 'false'])
@@ -43,6 +44,8 @@ const boundedCanonicalInteger = (minimum: number, maximum: number, fallback: num
     .pipe(z.number().int().min(minimum).max(maximum))
     .default(fallback);
 
+const trustProxy = z.string().default('false').refine(isSafeTrustProxy, 'unsafe trust proxy');
+
 const RuntimeEnvBaseSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
@@ -69,7 +72,13 @@ const RuntimeEnvBaseSchema = z.object({
   THROTTLE_TTL_SECONDS: z.coerce.number().int().min(1).max(3_600).default(60),
   THROTTLE_LIMIT: z.coerce.number().int().min(1).max(10_000).default(10),
   METRICS_TOKEN: z.string().min(16).max(256).optional(),
+  API_TRUST_PROXY: trustProxy,
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  LLM_PROVIDER_MODE: z.enum(['fake', 'live']).default('fake'),
+  LLM_PROMPT_GENERATION_ENABLED: booleanString,
+  LLM_PROVIDER_OPENAI_ENABLED: booleanString,
+  LLM_PROVIDER_GEMINI_ENABLED: booleanString,
+  LLM_PLATFORM_CREDITS_ENABLED: booleanString,
   LLM_CREDENTIAL_MASTER_KEY: z.preprocess(
     (value) => (value === '' ? undefined : value),
     base64Encoded32Bytes.optional(),
@@ -85,6 +94,10 @@ const RuntimeEnvBaseSchema = z.object({
   LLM_MAX_COST_MINOR_UNITS: boundedCanonicalInteger(0, 1_000_000, 500),
   LLM_PRICING_VERSION: z.string().trim().min(1).max(64).default('unconfigured-v1'),
   LLM_PRICING_CATALOG_JSON: z.string().trim().min(2).max(65_536).default('[]'),
+  LLM_RATE_LIMIT_HMAC_KEY: z.string().min(32).max(256).default('local-development-rate-limit-key'),
+  LLM_MAX_ACTIVE_JOBS_PER_USER: boundedCanonicalInteger(1, 50, 3),
+  LLM_DAILY_PLATFORM_CREDIT_BUDGET_MINOR: boundedCanonicalInteger(1, 1_000_000_000_000, 10_000),
+  LLM_FAKE_INITIAL_CREDITS_MINOR: boundedCanonicalInteger(1, 1_000_000, 1_000),
 });
 
 export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
@@ -108,6 +121,9 @@ export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
       message: 'an explicit LLM pricing catalog is required',
     });
   }
+  if (env.LLM_PROVIDER_MODE !== 'live') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'the fake LLM provider is forbidden' });
+  }
   if (!env.LLM_CREDENTIAL_MASTER_KEY) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -118,6 +134,12 @@ export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'an LLM credential key version is required',
+    });
+  }
+  if (env.LLM_RATE_LIMIT_HMAC_KEY === 'local-development-rate-limit-key') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'a dedicated rate-limit HMAC key is required',
     });
   }
   for (const endpoint of [env.LLM_OPENAI_BASE_URL, env.LLM_GEMINI_BASE_URL]) {
@@ -131,6 +153,7 @@ export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
     LLM_CREDENTIAL_KEY_VERSION: parsedEnv.LLM_CREDENTIAL_KEY_VERSION ?? 'local-v1',
   };
   const masterKey = env.LLM_CREDENTIAL_MASTER_KEY;
+  const rateLimitKey = env.LLM_RATE_LIMIT_HMAC_KEY;
 
   if (masterKey !== undefined) {
     Object.defineProperty(env, 'LLM_CREDENTIAL_MASTER_KEY', {
@@ -140,6 +163,12 @@ export const RuntimeEnvSchema = RuntimeEnvBaseSchema.superRefine((env, ctx) => {
       writable: false,
     });
   }
+  Object.defineProperty(env, 'LLM_RATE_LIMIT_HMAC_KEY', {
+    configurable: false,
+    enumerable: false,
+    value: rateLimitKey,
+    writable: false,
+  });
   Object.defineProperty(env, 'toJSON', {
     configurable: false,
     enumerable: false,
@@ -156,4 +185,21 @@ export function loadRuntimeEnv(
   input: NodeJS.ProcessEnv | Record<string, string | undefined>,
 ): RuntimeEnv {
   return RuntimeEnvSchema.parse(input);
+}
+
+function isSafeTrustProxy(value: string): boolean {
+  if (['false', 'loopback', 'linklocal', 'uniquelocal', '1', '2'].includes(value)) return true;
+  const entries = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (entries.length < 1 || entries.length > 16) return false;
+  try {
+    return entries.every((entry) => {
+      const [address] = ipaddr.parseCIDR(entry);
+      return ['private', 'loopback', 'linkLocal', 'uniqueLocal'].includes(address.range());
+    });
+  } catch {
+    return false;
+  }
 }

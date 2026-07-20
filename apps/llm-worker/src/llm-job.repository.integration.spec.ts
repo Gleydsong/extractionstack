@@ -396,6 +396,168 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     expect(JSON.stringify(audits)).not.toContain('Prompt natural persistido');
   });
 
+  it('repairs corrupt CREDIT_STATE_INVALID jobs from the scoped reservation', async () => {
+    const adminSub = `auth0|admin-finance-${randomUUID()}`;
+    const admin = await prisma.user.create({ data: { auth0Sub: adminSub, role: 'ADMIN' } });
+    const service = new LlmReconciliationService(prisma);
+    const cases = [
+      { command: 'REVERSE_NOT_CHARGED' as const, actual: null, amount: 100n },
+      { command: 'CONFIRM_ACTUAL_COST' as const, actual: '100', amount: 0n },
+      { command: 'CONFIRM_ACTUAL_COST' as const, actual: '40', amount: 60n },
+      { command: 'CONFIRM_ACTUAL_COST' as const, actual: '140', amount: -40n },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const fixture = await createFixture(prisma, true, {
+        maximumAcceptedAmountMinor: 'corrupt',
+      });
+      const claimed = await repository.claim(fixture.jobId);
+      await repository.markProviderStarted(claimed!);
+      await repository.markProviderCompleted(completion(claimed!, `corrupt-${index}`, 2n));
+      await repository.markAmbiguous(claimed!, 'CREDIT_STATE_INVALID');
+      const reservation = await prisma.creditLedgerEntry.findFirstOrThrow({
+        where: { jobId: fixture.jobId, kind: 'RESERVATION' },
+      });
+      await prisma.promptGenerationJob.update({
+        where: { id: fixture.jobId },
+        data: { requestMetadata: { corrupt: true }, providerSnapshot: { corrupt: true } },
+      });
+      if (index === 0) {
+        await expect(
+          service.reconcile(
+            { sub: adminSub, roles: ['admin'] },
+            fixture.jobId,
+            {
+              command: 'KNOWN_SNAPSHOT',
+              reason: 'operator attempted corrupt snapshot repair',
+              evidence: 'incident-corrupt-snapshot-12345',
+            },
+            `known-corrupt-${index}`,
+          ),
+        ).rejects.toMatchObject({ status: 409 });
+        await expect(
+          prisma.promptGenerationJob.findUniqueOrThrow({ where: { id: fixture.jobId } }),
+        ).resolves.toMatchObject({ status: 'AMBIGUOUS' });
+      }
+      const command = {
+        command: testCase.command,
+        reason: 'operator verified authoritative financial evidence',
+        evidence: `financial-evidence-${index}-12345`,
+        ...(testCase.actual === null ? {} : { actualCostMinor: testCase.actual }),
+      };
+
+      await expect(
+        service.reconcile(
+          { sub: adminSub, roles: ['admin'] },
+          fixture.jobId,
+          command,
+          `financial-key-${index}`,
+        ),
+      ).resolves.toMatchObject({ replayed: false });
+      const settlement = await prisma.creditLedgerEntry.findUniqueOrThrow({
+        where: { reservationId: reservation.id },
+      });
+      expect(settlement).toMatchObject({
+        ownerId: fixture.ownerId,
+        jobId: fixture.jobId,
+        currency: 'CREDITS',
+        kind: testCase.command === 'REVERSE_NOT_CHARGED' ? 'REVERSAL' : 'CONFIRMATION',
+        amountMinor: testCase.amount,
+      });
+      expect(
+        await prisma.auditEvent.count({
+          where: {
+            actorId: admin.id,
+            entityId: fixture.jobId,
+            action: 'llm_job.reconciliation_completed',
+          },
+        }),
+      ).toBe(1);
+    }
+  });
+
+  it('settles one concurrent financial command exactly once', async () => {
+    const fixture = await createFixture(prisma, true);
+    const claimed = await repository.claim(fixture.jobId);
+    await repository.markProviderStarted(claimed!);
+    await repository.markAmbiguous(claimed!, 'CREDIT_STATE_INVALID');
+    const adminSub = `auth0|admin-concurrent-finance-${randomUUID()}`;
+    await prisma.user.create({ data: { auth0Sub: adminSub, role: 'ADMIN' } });
+    const service = new LlmReconciliationService(prisma);
+    const body = {
+      command: 'CONFIRM_ACTUAL_COST' as const,
+      reason: 'operator verified concurrent provider invoice',
+      evidence: 'concurrent-invoice-evidence-12345',
+      actualCostMinor: '140',
+    };
+
+    const outcomes = await Promise.allSettled([
+      service.reconcile({ sub: adminSub, roles: ['admin'] }, fixture.jobId, body, 'finance-a'),
+      service.reconcile({ sub: adminSub, roles: ['admin'] }, fixture.jobId, body, 'finance-b'),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    expect(
+      await prisma.creditLedgerEntry.count({
+        where: { jobId: fixture.jobId, kind: 'CONFIRMATION' },
+      }),
+    ).toBe(1);
+  });
+
+  it('blocks cross-owner reservations and already-settled reservations', async () => {
+    const adminSub = `auth0|admin-invalid-finance-${randomUUID()}`;
+    await prisma.user.create({ data: { auth0Sub: adminSub, role: 'ADMIN' } });
+    const service = new LlmReconciliationService(prisma);
+    const otherOwner = await prisma.user.create({
+      data: { auth0Sub: `auth0|other-${randomUUID()}` },
+    });
+    const crossOwner = await createFixture(prisma, false);
+    const crossClaim = await repository.claim(crossOwner.jobId);
+    await repository.markProviderStarted(crossClaim!);
+    await repository.markAmbiguous(crossClaim!, 'CREDIT_STATE_INVALID');
+    await prisma.creditLedgerEntry.create({
+      data: {
+        ownerId: otherOwner.id,
+        jobId: crossOwner.jobId,
+        kind: 'RESERVATION',
+        amountMinor: -100n,
+        currency: 'CREDITS',
+        idempotencyKey: `cross-owner:${randomUUID()}`,
+      },
+    });
+    const body = {
+      command: 'REVERSE_NOT_CHARGED' as const,
+      reason: 'operator confirmed no provider charge',
+      evidence: 'cross-owner-evidence-12345',
+    };
+    await expect(
+      service.reconcile({ sub: adminSub, roles: ['admin'] }, crossOwner.jobId, body, 'cross-owner'),
+    ).rejects.toMatchObject({ status: 409 });
+
+    const settled = await createFixture(prisma, true);
+    const settledClaim = await repository.claim(settled.jobId);
+    await repository.markProviderStarted(settledClaim!);
+    await repository.markAmbiguous(settledClaim!, 'CREDIT_STATE_INVALID');
+    const reservation = await prisma.creditLedgerEntry.findFirstOrThrow({
+      where: { jobId: settled.jobId, kind: 'RESERVATION' },
+    });
+    await prisma.creditLedgerEntry.create({
+      data: {
+        ownerId: settled.ownerId,
+        jobId: settled.jobId,
+        kind: 'CONFIRMATION',
+        amountMinor: 0n,
+        currency: 'CREDITS',
+        idempotencyKey: `settled:${randomUUID()}`,
+        reservationId: reservation.id,
+      },
+    });
+    await expect(
+      service.reconcile({ sub: adminSub, roles: ['admin'] }, settled.jobId, body, 'settled'),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
   it('uses zero-delta CONFIRMATION when actual cost equals the reservation', async () => {
     const fixture = await createFixture(prisma, true);
     const claimed = await repository.claim(fixture.jobId);
@@ -514,9 +676,7 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
     const transientClaim = await repository.claim(transient.jobId);
     const validClaim = await repository.claim(valid.jobId);
     await repository.markProviderStarted(transientClaim!);
-    await repository.markProviderCompleted(
-      completion(transientClaim!, 'transient-request', null),
-    );
+    await repository.markProviderCompleted(completion(transientClaim!, 'transient-request', null));
     await repository.markProviderStarted(validClaim!);
     await repository.markProviderCompleted(completion(validClaim!, 'valid-after-transient', null));
     await prisma.promptGenerationJob.update({
@@ -530,7 +690,9 @@ describePostgres('LlmJobRepository PostgreSQL integration', () => {
         reconciliationReason?: string,
       ) {
         if (command.job.id === transient.jobId)
-          return Promise.reject(Object.assign(new Error('transaction conflict'), { code: 'P2034' }));
+          return Promise.reject(
+            Object.assign(new Error('transaction conflict'), { code: 'P2034' }),
+          );
         return super.complete(command, recoveryToken, reconciliationReason);
       }
     }
@@ -595,7 +757,15 @@ function completion(
   };
 }
 
-async function createFixture(client: PrismaClient, withCredits: boolean) {
+async function createFixture(
+  client: PrismaClient,
+  withCredits: boolean,
+  reservationMetadata: Record<string, string> = {
+    estimatedAmountMinor: '100',
+    maximumAcceptedAmountMinor: '100',
+    requestHash: '0'.repeat(64),
+  },
+) {
   const suffix = randomUUID();
   const user = await client.user.create({
     data: { auth0Sub: `auth0|worker-${suffix}`, email: `worker-${suffix}@example.test` },
@@ -662,11 +832,7 @@ async function createFixture(client: PrismaClient, withCredits: boolean) {
         amountMinor: -100n,
         currency: 'CREDITS',
         idempotencyKey: `reserve:${suffix}`,
-        metadata: {
-          estimatedAmountMinor: '100',
-          maximumAcceptedAmountMinor: '100',
-          requestHash: '0'.repeat(64),
-        },
+        metadata: reservationMetadata,
       },
     });
   }

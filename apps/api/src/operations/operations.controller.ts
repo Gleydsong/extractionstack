@@ -8,6 +8,7 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Response } from 'express';
 import { loadRuntimeEnv } from '../common/runtime-env.js';
 import { OperationsService } from './operations.service.js';
@@ -22,7 +23,7 @@ export class OperationsController {
   }
 
   @Get('health/ready')
-  async readiness(): Promise<{ status: 'ok'; checks: { database: true; redis: true } }> {
+  async readiness(): Promise<{ status: 'ok'; checks: Record<string, boolean> }> {
     const result = await this.operations.readiness();
     if (result.status !== 'ok') {
       throw new ServiceUnavailableException({
@@ -31,7 +32,10 @@ export class OperationsController {
         details: result.checks,
       });
     }
-    return { status: 'ok', checks: { database: true, redis: true } };
+    return {
+      status: 'ok',
+      checks: Object.fromEntries(Object.keys(result.checks).map((key) => [key, true])),
+    };
   }
 
   @Get('metrics')
@@ -41,9 +45,17 @@ export class OperationsController {
     @Res() response: Response,
   ): Promise<void> {
     const env = loadRuntimeEnv(process.env);
-    if (env.METRICS_TOKEN && authorization !== `Bearer ${env.METRICS_TOKEN}`) {
+    if (!env.METRICS_TOKEN || !secureTokenMatches(authorization, env.METRICS_TOKEN)) {
       throw new UnauthorizedException({ code: 'UNAUTHORIZED', message: 'invalid metrics token' });
     }
     response.type(this.operations.contentType()).send(await this.operations.metrics());
   }
+}
+
+function secureTokenMatches(authorization: string | undefined, expected: string): boolean {
+  const actualHash = createHash('sha256')
+    .update(authorization ?? '')
+    .digest();
+  const expectedHash = createHash('sha256').update(`Bearer ${expected}`).digest();
+  return timingSafeEqual(actualHash, expectedHash);
 }

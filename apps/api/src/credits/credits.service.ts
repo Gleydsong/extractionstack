@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { MAXIMUM_COST_MINOR } from '@extractionstack/shared';
 import { CREDITS_REPOSITORY, type CreditsRepositoryPort } from './credits.repository.js';
+import { loadRuntimeEnv } from '../common/runtime-env.js';
 
 const MAX_ID_LENGTH = 191;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 120;
@@ -87,6 +88,7 @@ export class CreditsService implements CreditsPort {
       amountMinor,
       maximumAcceptedAmountMinor: acceptedMaximum,
       idempotencyKey,
+      dailyBudgetMinor: BigInt(loadRuntimeEnv(process.env).LLM_DAILY_PLATFORM_CREDIT_BUDGET_MINOR),
     });
     return {
       id: reservation.id,

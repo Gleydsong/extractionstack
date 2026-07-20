@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import type { ExtractionJob } from '@extractionstack/shared';
 import { Header } from '../auth/Header';
 import { ReportView } from '../extract/ReportView';
@@ -32,10 +32,36 @@ export function ExtractionPage(): JSX.Element {
     <div className="app">
       <Header />
       <main>
-        {error ? <div className="card error-panel" role="alert">{error}</div> : null}
-        {job ? <section className="card"><h1>Extração</h1><JobStatus job={job} /></section> : null}
+        {error ? (
+          <div className="card error-panel" role="alert">
+            {error}
+          </div>
+        ) : null}
+        {job ? (
+          <section className="card">
+            <h1>Extração</h1>
+            <JobStatus job={job} />
+          </section>
+        ) : null}
         {job?.status === 'SUCCEEDED' && job.report ? (
-          <ReportView report={job.report} url={job.requestedUrl} />
+          <>
+            <div className="extraction-prompt-action">
+              <div>
+                <h2>Transformar relatório</h2>
+                <p>
+                  Crie um prompt em linguagem natural usando somente evidências permitidas desta
+                  extração.
+                </p>
+              </div>
+              <Link
+                className="primary-action"
+                to={`/extractions/${encodeURIComponent(job.id)}/prompts/new`}
+              >
+                Gerar prompt
+              </Link>
+            </div>
+            <ReportView report={job.report} url={job.requestedUrl} />
+          </>
         ) : null}
       </main>
     </div>

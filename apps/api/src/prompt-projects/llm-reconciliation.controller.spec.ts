@@ -44,6 +44,33 @@ describe('LLM reconciliation admin boundary', () => {
     ).toBe(false);
   });
 
+  it('accepts zero actual cost and rejects values above the server bound', () => {
+    const base = {
+      command: 'CONFIRM_ACTUAL_COST' as const,
+      reason: 'provider invoice was independently verified',
+      evidence: 'provider-invoice-reference-12345',
+    };
+    expect(
+      LlmReconciliationCommandSchema.safeParse({ ...base, actualCostMinor: '0' }).success,
+    ).toBe(true);
+    expect(
+      LlmReconciliationCommandSchema.safeParse({
+        ...base,
+        actualCostMinor: '1000000000001',
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(['abc', '1.2', '-1', ''])('rejects malformed cost %j without throwing', (value) => {
+    const result = LlmReconciliationCommandSchema.safeParse({
+      command: 'CONFIRM_ACTUAL_COST',
+      reason: 'provider invoice was independently verified',
+      evidence: 'provider-invoice-reference-12345',
+      actualCostMinor: value,
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('returns forbidden semantics for a non-admin actor', () => {
     const guard = new RolesGuard(new Reflector());
     const context = {

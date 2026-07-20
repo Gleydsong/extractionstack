@@ -2,17 +2,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Auth0User } from '@extractionstack/shared';
-import { Prisma } from '@prisma/client';
-import type { PrismaClient } from '@prisma/client';
+import { MAXIMUM_COST_MINOR, type Auth0User } from '@extractionstack/shared';
+import { Prisma, PrismaClient } from '@prisma/client';
 import type { LlmReconciliationCommand } from './llm-reconciliation.controller';
 
 @Injectable()
 export class LlmReconciliationService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(@Inject(PrismaClient) private readonly prisma: PrismaClient) {}
 
   async reconcile(actor: Auth0User, jobId: string, command: LlmReconciliationCommand, key: string) {
     return this.prisma
@@ -39,14 +39,22 @@ export class LlmReconciliationService {
             });
           return { jobId, status: 'accepted' as const, replayed: true };
         }
-        const job = await transaction.promptGenerationJob.findUnique({
-          where: { id: jobId },
-          include: {
-            creditLedgerEntries: { where: { kind: 'RESERVATION', settlement: null }, take: 1 },
-          },
-        });
+        const job = await transaction.promptGenerationJob.findUnique({ where: { id: jobId } });
         if (!job) throw new NotFoundException({ code: 'NOT_FOUND', message: 'resource not found' });
-        const reservation = job.creditLedgerEntries[0];
+        const reservations =
+          command.command === 'KNOWN_SNAPSHOT'
+            ? []
+            : await transaction.creditLedgerEntry.findMany({
+                where: {
+                  ownerId: job.ownerId,
+                  jobId: job.id,
+                  currency: 'CREDITS',
+                  kind: 'RESERVATION',
+                },
+                include: { settlement: { select: { id: true } } },
+                take: 2,
+              });
+        const reservation = reservations.length === 1 ? reservations[0] : null;
         if (
           command.command === 'KNOWN_SNAPSHOT' &&
           (job.status !== 'AMBIGUOUS' ||
@@ -54,7 +62,13 @@ export class LlmReconciliationService {
             !isNormalizedSnapshot(job.providerSnapshot))
         )
           throw invalidState();
-        if (command.command !== 'KNOWN_SNAPSHOT' && (job.status !== 'AMBIGUOUS' || !reservation))
+        if (
+          command.command !== 'KNOWN_SNAPSHOT' &&
+          (job.status !== 'AMBIGUOUS' ||
+            !reservation ||
+            reservation.amountMinor >= 0n ||
+            reservation.settlement)
+        )
           throw invalidState();
         const mutation = await transaction.mutationIdempotency.create({
           data: {
@@ -92,20 +106,13 @@ export class LlmReconciliationService {
           const reserved = -scopedReservation.amountMinor;
           const actual =
             command.command === 'CONFIRM_ACTUAL_COST' ? BigInt(command.actualCostMinor!) : 0n;
-          const maximum = reservationMaximum(scopedReservation.metadata);
-          if (actual > maximum)
+          if (actual < 0n || actual > MAXIMUM_COST_MINOR)
             throw new BadRequestException({
               code: 'CREDIT_COST_LIMIT_EXCEEDED',
-              message: 'actual cost exceeds accepted maximum',
+              message: 'actual cost exceeds the server limit',
             });
-          const kind =
-            command.command === 'REVERSE_NOT_CHARGED'
-              ? 'REVERSAL'
-              : actual === reserved
-                ? 'CONFIRMATION'
-                : 'ADJUSTMENT';
+          const kind = command.command === 'REVERSE_NOT_CHARGED' ? 'REVERSAL' : 'CONFIRMATION';
           const delta = reserved - actual;
-          if (kind === 'ADJUSTMENT' && delta === 0n) throw invalidState();
           await transaction.creditLedgerEntry.create({
             data: {
               ownerId: scopedReservation.ownerId,
@@ -116,6 +123,7 @@ export class LlmReconciliationService {
               idempotencyKey: `admin-reconcile:${scopedReservation.id}`,
               reservationId: scopedReservation.id,
               metadata: {
+                reservedAmountMinor: reserved.toString(),
                 actualAmountMinor: actual.toString(),
                 reason: command.reason,
                 evidenceHash: hash(command.evidence),
@@ -195,13 +203,6 @@ function invalidState() {
     message: 'job cannot be reconciled by this command',
   });
 }
-function reservationMaximum(metadata: Prisma.JsonValue | null): bigint {
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw invalidState();
-  const raw = (metadata as Record<string, Prisma.JsonValue>).maximumAcceptedAmountMinor;
-  if (typeof raw !== 'string') throw invalidState();
-  return BigInt(raw);
-}
-
 function isNormalizedSnapshot(value: Prisma.JsonValue | null): boolean {
   return (
     !!value &&

@@ -32,4 +32,11 @@ describe('OperationsController', () => {
       UnauthorizedException,
     );
   });
+
+  it('keeps metrics private when no token is configured', async () => {
+    const controller = new OperationsController({} as OperationsService);
+    await expect(controller.metrics(undefined, {} as never)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
 });

@@ -7,7 +7,7 @@ const MICROS_PER_MINOR = 10_000n;
 const RateSchema = z.string().regex(/^(0|[1-9][0-9]{0,18})$/);
 const EntrySchema = z
   .object({
-    provider: z.enum(['OPENAI', 'GEMINI']),
+    provider: z.enum(['OPENAI', 'GEMINI', 'FAKE']),
     model: z.string().trim().min(1).max(128),
     inputMicrosPerMillionTokens: RateSchema,
     cachedInputMicrosPerMillionTokens: RateSchema,

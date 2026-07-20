@@ -1,5 +1,6 @@
 export * from './narrative/report-narrative-assembler';
 export * from './prompt/prompt-composer';
+export * from './prompt/prompt-budget';
 export * from './providers/provider-adapter';
 export * from './providers/fake-provider.adapter';
 export * from './providers/gemini-provider.adapter';

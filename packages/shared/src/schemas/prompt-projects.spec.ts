@@ -6,11 +6,17 @@ import {
 } from './ai-connections.js';
 import {
   PromptAdaptationRequestSchema,
+  PromptCostEstimateRequestSchema,
+  PromptCostEstimateSchema,
   PromptGenerationRequestSchema,
   PromptPreviewRequestSchema,
   PromptProjectListQuerySchema,
   PromptGenerationJobSchema,
   PromptPreviewSchema,
+  PromptVersionDetailSchema,
+  PromptVersionEditRequestSchema,
+  PromptVersionListResponseSchema,
+  PromptVersionCostEstimateRequestSchema,
   PromptWizardInputSchema,
 } from './prompt-projects.js';
 
@@ -42,6 +48,51 @@ describe('prompt project command contracts', () => {
       PromptGenerationRequestSchema.parse({
         ...execution,
         maximumCostMinor: '1000000000001',
+      }),
+    ).toThrow();
+  });
+
+  it('exposes a strict server-priced report estimate without pricing internals', () => {
+    const request = {
+      wizard: wizardFixture,
+      provider: 'OPENAI',
+      model: 'configured-model',
+    } as const;
+    const estimate = {
+      provider: 'OPENAI',
+      model: 'configured-model',
+      maximumInputTokens: 2400,
+      maximumOutputTokens: 1000,
+      maximumCostMinor: '37',
+      pricingVersion: 'pricing-2026-07',
+      quotedAt: now,
+    } as const;
+    expect(PromptCostEstimateRequestSchema.parse(request)).toEqual(request);
+    expect(PromptCostEstimateSchema.parse(estimate)).toEqual(estimate);
+    expect(() => PromptCostEstimateSchema.parse({ ...estimate, rawRates: {} })).toThrow();
+    expect(() => PromptCostEstimateSchema.parse({ ...estimate, maximumCostMinor: '-1' })).toThrow();
+  });
+
+  it('binds a strict quote request to one immutable source version and operation', () => {
+    expect(
+      PromptVersionCostEstimateRequestSchema.parse({
+        provider: 'OPENAI',
+        model: 'configured-model',
+        operation: 'ADAPT',
+        destination: 'codex',
+      }),
+    ).toEqual({
+      provider: 'OPENAI',
+      model: 'configured-model',
+      operation: 'ADAPT',
+      destination: 'codex',
+    });
+    expect(() =>
+      PromptVersionCostEstimateRequestSchema.parse({
+        provider: 'OPENAI',
+        model: 'configured-model',
+        operation: 'PREVIEW',
+        destination: 'codex',
       }),
     ).toThrow();
   });
@@ -141,6 +192,34 @@ const promptJobFixture = {
 } as const;
 
 describe('LLM public contracts', () => {
+  it('keeps version reads and manual edits strict, bounded, and natural-language only', () => {
+    const version = {
+      id: 'cm1234567890abcdef',
+      projectId: 'cm2234567890abcdef',
+      sequence: 2,
+      sourceVersionId: 'cm3234567890abcdef',
+      kind: 'UNIVERSAL',
+      destination: 'universal',
+      content: 'Prompt natural revisado.',
+      summary: 'Revisao manual.',
+      provider: null,
+      model: null,
+      createdAt: now,
+    } as const;
+
+    expect(PromptVersionDetailSchema.parse(version)).toEqual(version);
+    expect(() => PromptVersionDetailSchema.parse({ ...version, rawProviderPayload: {} })).toThrow();
+    const { content, ...summary } = version;
+    void content;
+    expect(
+      PromptVersionListResponseSchema.parse({ items: [summary], nextCursor: null }).items[0],
+    ).not.toHaveProperty('content');
+    expect(PromptVersionEditRequestSchema.parse({ content: 'Conteudo editado.' })).toEqual({
+      content: 'Conteudo editado.',
+    });
+    expect(() => PromptVersionEditRequestSchema.parse({ content: 'x'.repeat(100_001) })).toThrow();
+  });
+
   it('rejects unknown wizard keys', () => {
     expect(() => PromptWizardInputSchema.parse({ ...wizardFixture, unknown: true })).toThrow();
   });

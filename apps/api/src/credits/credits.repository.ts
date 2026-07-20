@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
-import { Prisma, type CreditLedgerEntry, type PrismaClient } from '@prisma/client';
+import { Inject, Injectable } from '@nestjs/common';
+import { Prisma, PrismaClient, type CreditLedgerEntry } from '@prisma/client';
+import { loadRuntimeEnv } from '../common/runtime-env.js';
 
 export const CREDITS_REPOSITORY = Symbol('CREDITS_REPOSITORY');
 const CURRENCY = 'CREDITS';
@@ -11,6 +12,7 @@ export interface ReserveCreditsRecord {
   amountMinor: bigint;
   maximumAcceptedAmountMinor: bigint;
   idempotencyKey: string;
+  dailyBudgetMinor: bigint;
 }
 
 export interface CreditReservationRecord {
@@ -31,7 +33,7 @@ export interface CreditsRepositoryPort {
 
 @Injectable()
 export class CreditsRepository implements CreditsRepositoryPort {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(@Inject(PrismaClient) private readonly prisma: PrismaClient) {}
 
   async reserve(command: ReserveCreditsRecord): Promise<CreditReservationRecord> {
     return this.prisma.$transaction(async (transaction) => {
@@ -41,6 +43,7 @@ export class CreditsRepository implements CreditsRepositoryPort {
         select: { id: true },
       });
       if (!job) throw creditError('CREDIT_SCOPE_INVALID');
+      await ensureLocalFakeCredits(transaction, command.ownerId);
 
       const storedKey = reservationKey(command.ownerId, command.idempotencyKey);
       const requestHash = hash(
@@ -63,6 +66,10 @@ export class CreditsRepository implements CreditsRepositoryPort {
 
       const balance = await aggregateBalance(transaction, command.ownerId);
       if (balance < command.amountMinor) throw creditError('INSUFFICIENT_CREDITS');
+      const committed = await aggregateDailyPlatformCommitment(transaction, command.ownerId);
+      if (committed + command.amountMinor > command.dailyBudgetMinor) {
+        throw creditError('CREDIT_DAILY_BUDGET_EXCEEDED');
+      }
 
       const entry = await transaction.creditLedgerEntry.create({
         data: {
@@ -161,6 +168,34 @@ export class CreditsRepository implements CreditsRepositoryPort {
   }
 }
 
+async function ensureLocalFakeCredits(
+  transaction: CreditTransaction,
+  ownerId: string,
+): Promise<void> {
+  const env = loadRuntimeEnv(process.env);
+  if (env.NODE_ENV === 'production' || !env.AUTH_DEV_MODE || env.LLM_PROVIDER_MODE !== 'fake') {
+    return;
+  }
+  const owner = await transaction.user.findUnique({
+    where: { id: ownerId },
+    select: { auth0Sub: true },
+  });
+  if (owner?.auth0Sub !== 'dev|local') return;
+  const idempotencyKey = `local-fake-grant:${ownerId}`;
+  await transaction.creditLedgerEntry.upsert({
+    where: { idempotencyKey },
+    update: {},
+    create: {
+      ownerId,
+      kind: 'GRANT',
+      amountMinor: BigInt(env.LLM_FAKE_INITIAL_CREDITS_MINOR),
+      currency: CURRENCY,
+      idempotencyKey,
+      metadata: { source: 'local-fake-provider' },
+    },
+  });
+}
+
 type CreditTransaction = Prisma.TransactionClient;
 type BalanceReader = Pick<PrismaClient, 'creditLedgerEntry'> | CreditTransaction;
 
@@ -176,6 +211,23 @@ async function aggregateBalance(reader: BalanceReader, ownerId: string): Promise
     _sum: { amountMinor: true },
   });
   return aggregate._sum.amountMinor ?? 0n;
+}
+
+async function aggregateDailyPlatformCommitment(
+  transaction: CreditTransaction,
+  ownerId: string,
+): Promise<bigint> {
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  const reservations = await transaction.creditLedgerEntry.findMany({
+    where: { ownerId, currency: CURRENCY, kind: 'RESERVATION', createdAt: { gte: start } },
+    select: { amountMinor: true, settlement: { select: { amountMinor: true } } },
+  });
+  return reservations.reduce(
+    (total, reservation) =>
+      total - (reservation.amountMinor + (reservation.settlement?.amountMinor ?? 0n)),
+    0n,
+  );
 }
 
 async function findOpenReservation(

@@ -1,24 +1,36 @@
 import { createHash } from 'node:crypto';
-import { ConflictException, Inject, Injectable } from '@nestjs/common';
+import { ConflictException, HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 import {
+  ExtractionReportSchema,
   PromptGenerationJobSchema,
   PromptProjectListResponseSchema,
   PromptProjectSchema,
   PromptVersionSchema,
+  PromptPreviewSchema,
+  PromptVersionDetailSchema,
+  PromptVersionEditRequestSchema,
+  PromptVersionListResponseSchema,
   PromptWizardInputSchema,
   type Auth0User,
   type CredentialMode,
+  type ExtractionReport,
   type LlmProvider,
   type PromptGenerationJob,
   type PromptProject,
   type PromptProjectListQuery,
   type PromptProjectListResponse,
   type PromptVersion,
+  type PromptPreview,
+  type PromptVersionDetail,
+  type PromptVersionEditRequest,
+  type PromptVersionListQuery,
+  type PromptVersionListResponse,
   type PromptWizardInput,
 } from '@extractionstack/shared';
 import { Prisma, PrismaClient, type MutationIdempotency } from '@prisma/client';
 import { z } from 'zod';
 import type { PromptProjectsRepositoryPort } from './prompt-projects.service.js';
+import { loadRuntimeEnv } from '../common/runtime-env.js';
 
 const VersionMetadataSchema = z.object({ summary: z.string().trim().min(1).max(2_000) }).strict();
 
@@ -83,6 +95,17 @@ export class PromptProjectsRepository implements PromptProjectsRepositoryPort {
     return project ? publicProject(project) : null;
   }
 
+  async findExtractionReportOwned(
+    actor: Auth0User,
+    extractionId: string,
+  ): Promise<ExtractionReport | null> {
+    const extraction = await this.prisma.extractionJob.findFirst({
+      where: { id: extractionId, owner: { auth0Sub: actor.sub } },
+      select: { report: { select: { payload: true } } },
+    });
+    return extraction?.report ? ExtractionReportSchema.parse(extraction.report.payload) : null;
+  }
+
   async listProjectsOwned(
     actor: Auth0User,
     query: PromptProjectListQuery,
@@ -126,6 +149,117 @@ export class PromptProjectsRepository implements PromptProjectsRepositoryPort {
     });
   }
 
+  async listVersionsOwned(
+    actor: Auth0User,
+    projectId: string,
+    query: PromptVersionListQuery,
+  ): Promise<PromptVersionListResponse | null> {
+    const project = await this.prisma.promptProject.findFirst({
+      where: { id: projectId, owner: { auth0Sub: actor.sub } },
+      select: { id: true },
+    });
+    if (!project) return null;
+    const cursor = query.cursor
+      ? await this.prisma.promptVersion.findFirst({
+          where: { id: query.cursor, projectId: project.id },
+          select: { id: true, sequence: true },
+        })
+      : null;
+    if (query.cursor && !cursor) return null;
+    const versions = await this.prisma.promptVersion.findMany({
+      where: {
+        projectId: project.id,
+        ...(cursor ? { sequence: { lt: cursor.sequence } } : {}),
+      },
+      orderBy: { sequence: 'desc' },
+      take: query.limit + 1,
+    });
+    const items = versions.slice(0, query.limit);
+    return PromptVersionListResponseSchema.parse({
+      items: items.map(publicVersionSummary),
+      nextCursor: versions.length > query.limit ? (items.at(-1)?.id ?? null) : null,
+    });
+  }
+
+  async getVersionOwned(actor: Auth0User, id: string): Promise<PromptVersionDetail | null> {
+    const version = await this.prisma.promptVersion.findFirst({
+      where: { id, project: { owner: { auth0Sub: actor.sub } } },
+    });
+    return version ? publicVersionDetail(version) : null;
+  }
+
+  async findPreviewByJobOwned(actor: Auth0User, jobId: string): Promise<PromptPreview | null> {
+    const preview = await this.prisma.promptPreview.findFirst({
+      where: { jobId, job: { owner: { auth0Sub: actor.sub } } },
+    });
+    return preview ? publicPreview(preview) : null;
+  }
+
+  async createEditedVersionOwned(
+    actor: Auth0User,
+    sourceVersionId: string,
+    rawInput: PromptVersionEditRequest,
+    idempotencyKey: string,
+  ): Promise<{ result: PromptVersionDetail; created: boolean } | null> {
+    const input = PromptVersionEditRequestSchema.parse(rawInput);
+    const owner = await this.prisma.user.findUnique({ where: { auth0Sub: actor.sub } });
+    if (!owner) return null;
+    const source = await this.prisma.promptVersion.findFirst({
+      where: { id: sourceVersionId, project: { ownerId: owner.id, state: 'ACTIVE' } },
+    });
+    if (!source) return null;
+    const mutation = durableInput('prompt-version.edit', idempotencyKey, {
+      sourceVersionId,
+      content: input.content,
+    });
+    return this.executeDurable(
+      owner.id,
+      mutation,
+      PromptVersionDetailSchema,
+      async (transaction) => {
+        const scopedSource = await transaction.promptVersion.findFirst({
+          where: { id: source.id, project: { ownerId: owner.id, state: 'ACTIVE' } },
+        });
+        if (!scopedSource) throw targetMissing();
+        await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scopedSource.projectId}, 0))::text AS "lock"`;
+        const latest = await transaction.promptVersion.aggregate({
+          where: { projectId: scopedSource.projectId },
+          _max: { sequence: true },
+        });
+        const version = await transaction.promptVersion.create({
+          data: {
+            projectId: scopedSource.projectId,
+            sequence: (latest._max.sequence ?? 0) + 1,
+            sourceVersionId: scopedSource.id,
+            kind: scopedSource.kind,
+            destination: scopedSource.destination,
+            content: input.content,
+            metadata: { summary: `Edição manual da versão ${scopedSource.sequence}.` },
+            contentHash: hash(input.content),
+            templateVersion: scopedSource.templateVersion,
+            reportSchemaVersion: scopedSource.reportSchemaVersion,
+            provider: null,
+            model: null,
+          },
+        });
+        await transaction.promptProject.updateMany({
+          where: { id: scopedSource.projectId, ownerId: owner.id, state: 'ACTIVE' },
+          data: { currentVersionId: version.id },
+        });
+        await transaction.auditEvent.create({
+          data: {
+            actorId: owner.id,
+            action: 'prompt_version.edited',
+            entityType: 'PromptVersion',
+            entityId: version.id,
+            metadata: { sourceVersionId: scopedSource.id, projectId: scopedSource.projectId },
+          },
+        });
+        return publicVersionDetail(version);
+      },
+    );
+  }
+
   async findActiveConnectionOwned(
     actor: Auth0User,
     id: string,
@@ -149,16 +283,21 @@ export class PromptProjectsRepository implements PromptProjectsRepositoryPort {
     actor: Auth0User,
     command: Parameters<PromptProjectsRepositoryPort['createJob']>[1],
     idempotencyKey: string,
+    idempotencyRequest: Parameters<PromptProjectsRepositoryPort['createJob']>[3],
   ): Promise<{ result: PromptGenerationJob; ownerId: string; created: boolean }> {
     const owner = await this.prisma.user.findUnique({ where: { auth0Sub: actor.sub } });
     if (!owner) throw targetMissing();
     const operation = `prompt-job.${command.operation.toLowerCase()}`;
-    const mutation = durableInput(operation, idempotencyKey, command);
+    const mutation = durableInput(operation, idempotencyKey, {
+      command,
+      request: idempotencyRequest,
+    });
     const outcome = await this.executeDurable(
       owner.id,
       mutation,
       PromptGenerationJobSchema,
       async (transaction) => {
+        await assertLlmConcurrency(transaction, owner.id);
         const project = await transaction.promptProject.findFirst({
           where: { id: command.projectId, ownerId: owner.id, state: 'ACTIVE' },
           select: { id: true },
@@ -429,6 +568,23 @@ export class PromptProjectsRepository implements PromptProjectsRepositoryPort {
   }
 }
 
+async function assertLlmConcurrency(
+  transaction: Prisma.TransactionClient,
+  ownerId: string,
+): Promise<void> {
+  const env = loadRuntimeEnv(process.env);
+  await transaction.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${ownerId}, 0))`;
+  const activeJobs = await transaction.promptGenerationJob.count({
+    where: { ownerId, status: { in: ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'] } },
+  });
+  if (activeJobs >= env.LLM_MAX_ACTIVE_JOBS_PER_USER) {
+    throw new HttpException(
+      { code: 'RATE_LIMITED', message: 'active generation limit reached' },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  }
+}
+
 function publicProject(project: {
   id: string;
   extractionId: string;
@@ -537,6 +693,60 @@ function publicVersion(version: {
     provider: version.provider,
     model: version.model,
     createdAt: version.createdAt.toISOString(),
+  });
+}
+
+type PublicVersionRow = Parameters<typeof publicVersion>[0];
+
+function publicVersionSummary(version: PublicVersionRow) {
+  const detail = publicVersionDetail(version);
+  const { content, ...summary } = detail;
+  void content;
+  return summary;
+}
+
+function publicVersionDetail(version: PublicVersionRow): PromptVersionDetail {
+  const metadata = VersionMetadataSchema.parse(version.metadata);
+  return PromptVersionDetailSchema.parse({
+    id: version.id,
+    projectId: version.projectId,
+    sequence: version.sequence,
+    sourceVersionId: version.sourceVersionId,
+    kind: version.kind,
+    destination: version.destination,
+    content: version.content,
+    summary: metadata.summary,
+    provider: version.provider,
+    model: version.model,
+    createdAt: version.createdAt.toISOString(),
+  });
+}
+
+function publicPreview(preview: {
+  id: string;
+  promptVersionId: string;
+  status: string;
+  content: string;
+  summary: string;
+  provider: string;
+  model: string;
+  finishReason: string | null;
+  latencyMs: number | null;
+  createdAt: Date;
+  completedAt: Date | null;
+}): PromptPreview {
+  return PromptPreviewSchema.parse({
+    id: preview.id,
+    promptVersionId: preview.promptVersionId,
+    status: preview.status,
+    content: preview.content,
+    summary: preview.summary,
+    provider: preview.provider,
+    model: preview.model,
+    finishReason: preview.finishReason,
+    latencyMs: preview.latencyMs,
+    createdAt: preview.createdAt.toISOString(),
+    completedAt: preview.completedAt?.toISOString() ?? null,
   });
 }
 

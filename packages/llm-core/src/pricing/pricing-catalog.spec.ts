@@ -72,4 +72,29 @@ describe('PricingCatalog', () => {
     expect(catalog().has('OPENAI', 'gpt-test')).toBe(true);
     expect(catalog().has('GEMINI', 'missing')).toBe(false);
   });
+
+  it('supports deterministic FAKE-provider pricing for isolated end-to-end tests', () => {
+    const fake = new PricingCatalog('fake-test-v1', [
+      {
+        provider: 'FAKE',
+        model: 'fake-deterministic-v1',
+        inputMicrosPerMillionTokens: '1',
+        cachedInputMicrosPerMillionTokens: '1',
+        outputMicrosPerMillionTokens: '1',
+        reasoningMicrosPerMillionTokens: '1',
+        requireCachedTokens: false,
+        requireReasoningTokens: false,
+      },
+    ]);
+
+    expect(fake.has('FAKE', 'fake-deterministic-v1')).toBe(true);
+    expect(
+      fake.price('FAKE', 'fake-deterministic-v1', {
+        inputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 30,
+        estimatedCostMicros: 0,
+      }),
+    ).toEqual({ pricingVersion: 'fake-test-v1', amountMicros: 1n, amountMinor: 1n });
+  });
 });

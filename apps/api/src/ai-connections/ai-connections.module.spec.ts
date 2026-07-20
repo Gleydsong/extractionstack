@@ -9,6 +9,7 @@ import { OAuthStateService, RedisIdempotencyService } from './oauth-state.servic
 
 const oauthEnv = {
   NODE_ENV: 'test',
+  LLM_PROVIDER_MODE: 'live',
   LLM_GEMINI_OAUTH_CLIENT_ID: 'client-id.apps.googleusercontent.com',
   LLM_GEMINI_OAUTH_CLIENT_SECRET: 'client-secret',
   LLM_GEMINI_OAUTH_PROJECT_ID: 'gemini-project-123',
@@ -117,6 +118,7 @@ describe('provider registry configuration', () => {
   it('omits Gemini OAuth when OAuth configuration is absent', () => {
     const gemini = createProviderRegistry({
       NODE_ENV: 'production',
+      LLM_PROVIDER_MODE: 'live',
       AUTH0_DOMAIN: 'tenant.eu.auth0.com',
       AUTH0_AUDIENCE: 'https://api.example.test',
       CORS_ORIGIN: 'https://app.example.test',
@@ -124,6 +126,7 @@ describe('provider registry configuration', () => {
       REDIS_URL: 'redis://redis:6379',
       LLM_CREDENTIAL_MASTER_KEY: Buffer.alloc(32, 7).toString('base64'),
       LLM_CREDENTIAL_KEY_VERSION: 'production-v1',
+      LLM_RATE_LIMIT_HMAC_KEY: 'production-rate-limit-key-with-32-bytes',
       LLM_PRICING_VERSION: 'test-v1',
       LLM_PRICING_CATALOG_JSON: '[{"provider":"OPENAI","model":"gpt-5-mini"}]',
     }).get('GEMINI');

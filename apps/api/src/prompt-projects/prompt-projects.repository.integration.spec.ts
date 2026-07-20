@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ProviderRegistry } from '@extractionstack/llm-core';
+import { PricingCatalog, ProviderRegistry } from '@extractionstack/llm-core';
 import type { Auth0User, PromptWizardInput } from '@extractionstack/shared';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -42,8 +42,18 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
       'project:idempotent',
     ))!.result;
     const command = generationCommand(project.id);
-    const first = await repository.createJob(owner, command, 'generation:idempotent');
-    const second = await repository.createJob(owner, command, 'generation:idempotent');
+    const first = await repository.createJob(
+      owner,
+      command,
+      'generation:idempotent',
+      paidRequest(),
+    );
+    const second = await repository.createJob(
+      owner,
+      command,
+      'generation:idempotent',
+      paidRequest(),
+    );
 
     expect(second).toMatchObject({ created: false, result: { id: first.result.id } });
     expect(await prisma.promptGenerationJob.count({ where: { id: first.result.id } })).toBe(1);
@@ -53,7 +63,16 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
       }),
     ).toBe(1);
     await expect(
-      repository.createJob(owner, { ...command, model: 'other-model' }, 'generation:idempotent'),
+      repository.createJob(owner, { ...command, model: 'other-model' }, 'generation:idempotent', {
+        ...paidRequest(),
+        model: 'other-model',
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      repository.createJob(owner, command, 'generation:idempotent', {
+        ...paidRequest(),
+        maximumCostMinor: '101',
+      }),
     ).rejects.toMatchObject({ status: 409 });
   });
 
@@ -107,6 +126,14 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
           connectionId: connection.id,
         },
         'generation:cross-owner-connection',
+        {
+          provider: 'OPENAI',
+          model: 'configured-model',
+          credentialMode: 'API_KEY',
+          connectionId: connection.id,
+          acceptPlatformCharge: false,
+          maximumCostMinor: null,
+        },
       ),
     ).rejects.toThrow('prompt job connection scope is invalid');
   });
@@ -120,13 +147,48 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
       'project:failed-replay',
     ))!.result;
     const command = generationCommand(project.id);
-    const first = await repository.createJob(owner, command, 'generation:failed-replay');
+    const first = await repository.createJob(
+      owner,
+      command,
+      'generation:failed-replay',
+      paidRequest(),
+    );
     await repository.failJob(owner, first.result.id, 'QUEUE_UNAVAILABLE');
 
-    const replay = await repository.createJob(owner, command, 'generation:failed-replay');
+    const replay = await repository.createJob(
+      owner,
+      command,
+      'generation:failed-replay',
+      paidRequest(),
+    );
     expect(replay).toMatchObject({
       created: false,
       result: { id: first.result.id, status: 'FAILED' },
+    });
+  });
+
+  it('serializes active-job admission and enforces the per-owner concurrency cap', async () => {
+    const owner = actor('active-quota');
+    const extractionId = await createExtraction(prisma, owner);
+    const project = (await repository.createProject(
+      owner,
+      wizard(extractionId),
+      'project:active-quota',
+    ))!.result;
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 4 }, (_, index) =>
+        repository.createJob(
+          owner,
+          generationCommand(project.id),
+          `generation:active-quota:${index}`,
+          paidRequest(),
+        ),
+      ),
+    );
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(3);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    expect(outcomes.find((outcome) => outcome.status === 'rejected')).toMatchObject({
+      reason: { status: 429 },
     });
   });
 
@@ -194,7 +256,7 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
       enqueue: vi.fn().mockRejectedValue(new Error('redis secret payload')),
       cancel: vi.fn(),
     };
-    const service = new PromptProjectsService(repository, queue, registry(), credits);
+    const service = new PromptProjectsService(repository, queue, registry(), credits, pricing());
 
     await expect(
       service.generate(owner, project.id, paidRequest(), 'generation:queue-failure'),
@@ -253,6 +315,7 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
       queue,
       registry(),
       new CreditsService(new CreditsRepository(prisma)),
+      pricing(),
     );
 
     const result = await service.generate(
@@ -296,6 +359,7 @@ describePostgres('PromptProjectsRepository PostgreSQL integration', () => {
       queue,
       registry(),
       new CreditsService(new CreditsRepository(prisma)),
+      pricing(),
     );
     const queued = await service.generate(owner, project.id, paidRequest(), 'generation:cancel');
 
@@ -432,6 +496,21 @@ function registry(): ProviderRegistry {
       pricingMetadataVersion: 'test-v1',
       enabled: true,
       circuitBreakerOpen: false,
+    },
+  ]);
+}
+
+function pricing(): PricingCatalog {
+  return new PricingCatalog('test-v1', [
+    {
+      provider: 'OPENAI',
+      model: 'configured-model',
+      inputMicrosPerMillionTokens: '1000000',
+      cachedInputMicrosPerMillionTokens: '1000000',
+      outputMicrosPerMillionTokens: '1000000',
+      reasoningMicrosPerMillionTokens: '1000000',
+      requireCachedTokens: false,
+      requireReasoningTokens: false,
     },
   ]);
 }

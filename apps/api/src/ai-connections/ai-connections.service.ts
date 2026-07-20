@@ -9,9 +9,11 @@ import {
 } from '@nestjs/common';
 import {
   AiConnectionSchema,
+  GeminiOAuthStartResponseSchema,
   type AiConnection,
   type Auth0User,
   type CredentialMode,
+  type GeminiOAuthStartResponse,
   type LlmProvider,
 } from '@extractionstack/shared';
 import { z } from 'zod';
@@ -160,13 +162,6 @@ const OAuthTokenPayloadSchema = z
     refreshToken: z.string().min(1).max(16_384).nullable(),
   })
   .strict();
-const OAuthStartSchema = z
-  .object({
-    state: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-    authorizationUrl: z.string().url().max(4_096),
-  })
-  .strict();
-
 @Injectable()
 export class AiConnectionsService {
   constructor(
@@ -227,7 +222,7 @@ export class AiConnectionsService {
     provider: 'GEMINI',
     redirectUri: string,
     idempotencyKey: string,
-  ): Promise<{ state: string; authorizationUrl: string }> {
+  ): Promise<GeminiOAuthStartResponse> {
     if (provider !== 'GEMINI') throw oauthProviderInvalid();
     if (this.config.oauthEnabled === false) {
       throw new ServiceUnavailableException({
@@ -271,17 +266,24 @@ export class AiConnectionsService {
           code_challenge: createHash('sha256').update(verifier).digest('base64url'),
           code_challenge_method: 'S256',
         }).toString();
-        return OAuthStartSchema.parse({ state, authorizationUrl: authorizationUrl.toString() });
+        return GeminiOAuthStartResponseSchema.parse({
+          state,
+          authorizationUrl: authorizationUrl.toString(),
+        });
       },
       encodeResult: (value) =>
-        this.vault.encrypt(actor.sub, 'GEMINI', JSON.stringify(OAuthStartSchema.parse(value))),
+        this.vault.encrypt(
+          actor.sub,
+          'GEMINI',
+          JSON.stringify(GeminiOAuthStartResponseSchema.parse(value)),
+        ),
       parse: async (value) => {
         const plaintext = await this.vault.decrypt(
           actor.sub,
           'GEMINI',
           value as CredentialEnvelope,
         );
-        return OAuthStartSchema.parse(JSON.parse(plaintext));
+        return GeminiOAuthStartResponseSchema.parse(JSON.parse(plaintext));
       },
       cacheRequired: true,
     });

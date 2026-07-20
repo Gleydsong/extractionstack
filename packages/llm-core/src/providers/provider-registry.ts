@@ -1,6 +1,10 @@
-import type { LlmProvider } from '@extractionstack/shared';
+import {
+  PublicProviderCapabilitiesSchema,
+  type LlmProvider,
+  type PublicProviderCapabilities,
+} from '@extractionstack/shared';
 import { z } from 'zod';
-import type { ProviderCapabilities, PublicProviderCapabilities } from './provider-adapter';
+import type { ProviderCapabilities } from './provider-adapter';
 import { ProviderFailure } from './provider-errors';
 
 const ProviderRegistryOptionsSchema = z
@@ -127,7 +131,7 @@ export class ProviderRegistry {
       [...this.capabilitiesByProvider.values()]
         .filter((capabilities) => capabilities.provider !== 'FAKE' || this.allowTestProvider)
         .map((capabilities) => {
-          return Object.freeze({
+          return PublicProviderCapabilitiesSchema.parse({
             provider: capabilities.provider,
             credentialModes: capabilities.credentialModes,
             models: capabilities.models,

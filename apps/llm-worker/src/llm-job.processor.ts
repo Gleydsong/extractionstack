@@ -6,11 +6,12 @@ import type {
 import {
   PricingFailure,
   ProviderFailure,
+  composedPromptLayers,
+  conservativeInputTokenUpperBound,
   type CredentialResolver,
   type GenerationInput,
   type NormalizedUsage,
   type PricingCatalog,
-  type PromptLayer,
 } from '@extractionstack/llm-core';
 import type {
   AuthorizedLlmContext,
@@ -19,6 +20,7 @@ import type {
   ProviderAdapterRegistryPort,
   SecurityRecord,
 } from './llm-worker.types';
+import type { LlmWorkerOperationsService } from './llm-worker-operations.service.js';
 
 export type LlmJobProcessorDependencies = Readonly<{
   store: LlmJobStorePort;
@@ -30,6 +32,10 @@ export type LlmJobProcessorDependencies = Readonly<{
   pricing: PricingCatalog;
   now?: () => number;
   cancellationPollMs?: number;
+  operations?: Pick<
+    LlmWorkerOperationsService,
+    'recordJob' | 'recordUsage' | 'recordGuardrail' | 'recordCircuitBreaker'
+  >;
 }>;
 
 export class LlmJobProcessor {
@@ -80,6 +86,10 @@ export class LlmJobProcessor {
           ]),
         ]),
       });
+      this.dependencies.operations?.recordGuardrail(
+        security.action,
+        security.reasonCodes[0] ?? 'other',
+      );
       const composed = this.dependencies.composer.compose({
         wizard: context.wizard,
         brief,
@@ -87,7 +97,12 @@ export class LlmJobProcessor {
       });
       const adapter = this.dependencies.providers.get(job.provider);
       const capabilities = adapter.getCapabilities();
-      const composedLayers = layers(composed);
+      this.dependencies.operations?.recordCircuitBreaker(
+        job.provider,
+        capabilities.circuitBreakerOpen,
+      );
+      assertProviderAvailable(capabilities);
+      const composedLayers = composedPromptLayers(composed);
       const maximumInputTokens = conservativeInputTokenUpperBound(composedLayers);
       const allowedOutputTokens = Math.min(
         capabilities.maxOutputTokens,
@@ -145,6 +160,12 @@ export class LlmJobProcessor {
         throw new LlmRecoveryPendingFailure();
       }
       if (!markedStarted) throw new LlmRecoveryPendingFailure();
+      const executionCapabilities = adapter.getCapabilities();
+      this.dependencies.operations?.recordCircuitBreaker(
+        job.provider,
+        executionCapabilities.circuitBreakerOpen,
+      );
+      assertProviderAvailable(executionCapabilities);
       providerStarted = true;
       const startedAt = this.now();
       const result = await this.invokeWithCancellation(job, abortController, () =>
@@ -203,6 +224,24 @@ export class LlmJobProcessor {
           .catch(() => false);
         return;
       }
+      this.dependencies.operations?.recordUsage({
+        provider: job.provider,
+        model: job.model,
+        mode: job.credentialMode,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        costMinor: Number(priced?.amountMinor ?? 0n),
+      });
+      this.dependencies.operations?.recordJob({
+        provider: job.provider,
+        model: job.model,
+        mode: job.credentialMode,
+        operation: job.operation,
+        status: 'SUCCEEDED',
+        errorCategory: 'none',
+        durationSeconds: latencyMs / 1_000,
+        retries: Math.max(0, job.attempts - 1),
+      });
     } catch (cause) {
       if (cause instanceof LlmRecoveryPendingFailure) throw cause;
       if (cause instanceof LeaseUnknownFailure) {
@@ -210,6 +249,16 @@ export class LlmJobProcessor {
         return;
       }
       const failure = sanitizedFailure(cause);
+      this.dependencies.operations?.recordJob({
+        provider: job.provider,
+        model: job.model,
+        mode: job.credentialMode,
+        operation: job.operation,
+        status: providerStarted ? 'AMBIGUOUS' : 'FAILED',
+        errorCategory: metricErrorCategory(failure.code),
+        durationSeconds: 0,
+        retries: Math.max(0, job.attempts - 1),
+      });
       if (providerStarted) {
         await this.dependencies.store
           .markAmbiguous(job, 'PROVIDER_OUTCOME_UNKNOWN')
@@ -274,6 +323,14 @@ export class LlmJobProcessor {
   }
 }
 
+function metricErrorCategory(code: string): string {
+  if (/AUTH/.test(code)) return 'authentication';
+  if (/TIMEOUT/.test(code)) return 'timeout';
+  if (/RESPONSE/.test(code)) return 'invalid_output';
+  if (/PROVIDER/.test(code)) return 'provider_unavailable';
+  return 'internal';
+}
+
 class LlmRecoveryPendingFailure extends Error {
   constructor() {
     super('LLM_RECOVERY_PENDING');
@@ -282,18 +339,6 @@ class LlmRecoveryPendingFailure extends Error {
 }
 
 class LeaseUnknownFailure extends Error {}
-
-function conservativeInputTokenUpperBound(layersInput: readonly PromptLayer[]): number {
-  const protocolOverheadBytes = 2_048;
-  const bytes = layersInput.reduce(
-    (total, layer) =>
-      total + Buffer.byteLength(layer.kind, 'utf8') + Buffer.byteLength(layer.content, 'utf8') + 64,
-    protocolOverheadBytes,
-  );
-  if (!Number.isSafeInteger(bytes) || bytes > 2_147_483_647)
-    throw new ProviderFailure('INPUT_INVALID');
-  return bytes;
-}
 
 function assertUsageBounds(
   usage: NormalizedUsage,
@@ -317,16 +362,6 @@ function assertUsageBounds(
     (usage.reasoningTokens ?? 0) > usage.outputTokens
   )
     throw new ProviderFailure('INVALID_RESPONSE');
-}
-
-function layers(composed: ReturnType<PromptComposer['compose']>): readonly PromptLayer[] {
-  return Object.freeze([
-    Object.freeze({ kind: 'platform-policy' as const, content: composed.system }),
-    Object.freeze({ kind: 'task' as const, content: composed.userTask }),
-    Object.freeze({ kind: 'source-context' as const, content: composed.sourceData }),
-    Object.freeze({ kind: 'destination-rules' as const, content: composed.destinationRules }),
-    Object.freeze({ kind: 'response-contract' as const, content: composed.outputContract }),
-  ]);
 }
 
 function previewInput(context: AuthorizedLlmContext) {
@@ -378,5 +413,14 @@ function assertDelivery(jobId: string, attempt: number, maxAttempts: number): vo
     attempt > maxAttempts
   ) {
     throw new ProviderFailure('INPUT_INVALID');
+  }
+}
+
+function assertProviderAvailable(capabilities: {
+  enabled: boolean;
+  circuitBreakerOpen: boolean;
+}): void {
+  if (!capabilities.enabled || capabilities.circuitBreakerOpen) {
+    throw new ProviderFailure('PROVIDER_UNAVAILABLE');
   }
 }

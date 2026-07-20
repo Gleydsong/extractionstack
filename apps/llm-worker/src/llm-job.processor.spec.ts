@@ -48,9 +48,12 @@ function setup(overrides?: { attempts?: number; maxAttempts?: number }) {
     reject: vi.fn().mockResolvedValue(true),
   };
   const provider = {
-    getCapabilities: vi
-      .fn()
-      .mockReturnValue({ maxOutputTokens: 1_000, contextWindowTokens: 20_000 }),
+    getCapabilities: vi.fn().mockReturnValue({
+      maxOutputTokens: 1_000,
+      contextWindowTokens: 20_000,
+      enabled: true,
+      circuitBreakerOpen: false,
+    }),
     generatePrompt: vi.fn().mockResolvedValue({
       content: 'Prompt universal de teste.',
       finishReason: 'complete',
@@ -96,6 +99,12 @@ function setup(overrides?: { attempts?: number; maxAttempts?: number }) {
     },
     providers: { get: vi.fn().mockReturnValue(provider) },
     pricing,
+    operations: {
+      recordJob: vi.fn(),
+      recordUsage: vi.fn(),
+      recordGuardrail: vi.fn(),
+      recordCircuitBreaker: vi.fn(),
+    },
   };
   return {
     processor: new LlmJobProcessor(dependencies as never),
@@ -109,13 +118,32 @@ function setup(overrides?: { attempts?: number; maxAttempts?: number }) {
 
 describe('LlmJobProcessor', () => {
   it('persists natural language with catalog price and version', async () => {
-    const { processor, store } = setup();
+    const { processor, store, dependencies } = setup();
     await processor.process('job-1', 1, 10);
     expect(store.complete).toHaveBeenCalledWith(
       expect.objectContaining({
         actualAmountMinor: 1n,
         pricingVersion: 'price-2026-07-17',
         result: expect.objectContaining({ content: 'Prompt universal de teste.' }),
+      }),
+    );
+    expect(dependencies.operations.recordGuardrail).toHaveBeenCalledWith('ALLOW', 'other');
+    expect(dependencies.operations.recordCircuitBreaker).toHaveBeenCalledWith('OPENAI', false);
+    expect(dependencies.operations.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'OPENAI',
+        model: 'gpt-test',
+        inputTokens: 10,
+        outputTokens: 5,
+        costMinor: 1,
+      }),
+    );
+    expect(dependencies.operations.recordJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'OPENAI',
+        model: 'gpt-test',
+        status: 'SUCCEEDED',
+        errorCategory: 'none',
       }),
     );
   });
@@ -160,6 +188,50 @@ describe('LlmJobProcessor', () => {
     expect(store.markProviderStarted).not.toHaveBeenCalled();
   });
 
+  it('fails a queued job without retry or adapter call when its provider is disabled', async () => {
+    const state = setup();
+    state.provider.getCapabilities.mockReturnValue({
+      maxOutputTokens: 1_000,
+      contextWindowTokens: 20_000,
+      enabled: false,
+      circuitBreakerOpen: false,
+    });
+
+    await state.processor.process('job-1', 1, 10);
+
+    expect(state.store.fail).toHaveBeenCalledWith(state.claimed, 'PROVIDER_UNAVAILABLE');
+    expect(state.store.markRetry).not.toHaveBeenCalled();
+    expect(state.store.deadLetter).not.toHaveBeenCalled();
+    expect(state.store.markProviderStarted).not.toHaveBeenCalled();
+    expect(state.provider.generatePrompt).not.toHaveBeenCalled();
+  });
+
+  it('rechecks provider availability immediately before the adapter call', async () => {
+    const state = setup();
+    state.provider.getCapabilities
+      .mockReturnValueOnce({
+        maxOutputTokens: 1_000,
+        contextWindowTokens: 20_000,
+        enabled: true,
+        circuitBreakerOpen: false,
+      })
+      .mockReturnValue({
+        maxOutputTokens: 1_000,
+        contextWindowTokens: 20_000,
+        enabled: true,
+        circuitBreakerOpen: true,
+      });
+
+    await state.processor.process('job-1', 1, 10);
+
+    expect(state.provider.getCapabilities).toHaveBeenCalledTimes(2);
+    expect(state.store.fail).toHaveBeenCalledWith(state.claimed, 'PROVIDER_UNAVAILABLE');
+    expect(state.store.markRetry).not.toHaveBeenCalled();
+    expect(state.store.markProviderStarted).toHaveBeenCalledOnce();
+    expect(state.store.markAmbiguous).not.toHaveBeenCalled();
+    expect(state.provider.generatePrompt).not.toHaveBeenCalled();
+  });
+
   it('never acknowledges transport when persistence of provider STARTED is unknown', async () => {
     const { processor, store, provider } = setup();
     store.markProviderStarted.mockRejectedValue(new Error('connection lost after commit'));
@@ -182,6 +254,8 @@ describe('LlmJobProcessor', () => {
     state.provider.getCapabilities.mockReturnValue({
       maxOutputTokens: 1_000,
       contextWindowTokens: 3_000,
+      enabled: true,
+      circuitBreakerOpen: false,
     });
     const quote = vi.spyOn(state.dependencies.pricing, 'quoteMaximum');
     await state.processor.process('job-1', 1, 10);

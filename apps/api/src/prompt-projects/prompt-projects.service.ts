@@ -8,14 +8,32 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { ProviderFailure, ProviderRegistry } from '@extractionstack/llm-core';
 import {
+  PricingCatalog,
+  PricingFailure,
+  PromptComposer,
+  ProviderFailure,
+  ProviderRegistry,
+  ReportNarrativeAssembler,
+  composedPromptLayers,
+  conservativeInputTokenUpperBound,
+} from '@extractionstack/llm-core';
+import {
+  MAXIMUM_COST_MINOR,
+  PromptCostEstimateSchema,
   PromptGenerationJobSchema,
   PromptProjectListResponseSchema,
   PromptProjectSchema,
+  PromptPreviewSchema,
+  PromptVersionDetailSchema,
+  PromptVersionCostEstimateSchema,
+  PromptVersionListResponseSchema,
   type Auth0User,
   type CredentialMode,
+  type ExtractionReport,
   type LlmProvider,
+  type PromptCostEstimate,
+  type PromptCostEstimateRequest,
   type PromptAdaptationRequest,
   type PromptGenerationJob,
   type PromptGenerationRequest,
@@ -23,8 +41,17 @@ import {
   type PromptProject,
   type PromptProjectListQuery,
   type PromptProjectListResponse,
+  type PromptPreview,
+  type PromptVersionDetail,
+  type PromptVersion,
+  type PromptVersionCostEstimate,
+  type PromptVersionCostEstimateRequest,
+  type PromptVersionEditRequest,
+  type PromptVersionListQuery,
+  type PromptVersionListResponse,
   type PromptWizardInput,
 } from '@extractionstack/shared';
+import { loadRuntimeEnv } from '../common/runtime-env.js';
 import { CreditsService, type CreditsPort } from '../credits/credits.service.js';
 
 export const PROMPT_PROJECTS_REPOSITORY = Symbol('PROMPT_PROJECTS_REPOSITORY');
@@ -41,6 +68,8 @@ type JobCommand = Readonly<{
   requestMetadata: Readonly<{ destination?: string }>;
 }>;
 
+type ExecutionRequest = PromptGenerationRequest | PromptAdaptationRequest | PromptPreviewRequest;
+
 export interface PromptProjectsRepositoryPort {
   createProject(
     actor: Auth0User,
@@ -48,11 +77,28 @@ export interface PromptProjectsRepositoryPort {
     idempotencyKey: string,
   ): Promise<{ result: PromptProject; created: boolean } | null>;
   findProjectOwned(actor: Auth0User, id: string): Promise<PromptProject | null>;
+  findExtractionReportOwned(
+    actor: Auth0User,
+    extractionId: string,
+  ): Promise<ExtractionReport | null>;
   listProjectsOwned(
     actor: Auth0User,
     query: PromptProjectListQuery,
   ): Promise<PromptProjectListResponse | null>;
   findVersionOwned(actor: Auth0User, id: string): Promise<{ id: string; projectId: string } | null>;
+  listVersionsOwned(
+    actor: Auth0User,
+    projectId: string,
+    query: PromptVersionListQuery,
+  ): Promise<PromptVersionListResponse | null>;
+  getVersionOwned(actor: Auth0User, id: string): Promise<PromptVersionDetail | null>;
+  findPreviewByJobOwned(actor: Auth0User, jobId: string): Promise<PromptPreview | null>;
+  createEditedVersionOwned(
+    actor: Auth0User,
+    sourceVersionId: string,
+    input: PromptVersionEditRequest,
+    idempotencyKey: string,
+  ): Promise<{ result: PromptVersionDetail; created: boolean } | null>;
   findActiveConnectionOwned(
     actor: Auth0User,
     id: string,
@@ -63,6 +109,7 @@ export interface PromptProjectsRepositoryPort {
     actor: Auth0User,
     command: JobCommand,
     idempotencyKey: string,
+    idempotencyRequest: ExecutionRequest,
   ): Promise<{ result: PromptGenerationJob; ownerId: string; created: boolean }>;
   findJobOwned(actor: Auth0User, id: string): Promise<PromptGenerationJob | null>;
   failJob(actor: Auth0User, id: string, errorCode: string): Promise<PromptGenerationJob | null>;
@@ -79,8 +126,6 @@ export interface PromptGenerationQueuePort {
   cancel(jobId: string): Promise<void>;
 }
 
-type ExecutionRequest = PromptGenerationRequest | PromptAdaptationRequest | PromptPreviewRequest;
-
 @Injectable()
 export class PromptProjectsService {
   constructor(
@@ -88,13 +133,166 @@ export class PromptProjectsService {
     @Inject(PROMPT_GENERATION_QUEUE) private readonly queue: PromptGenerationQueuePort,
     @Inject(ProviderRegistry) private readonly registry: ProviderRegistry,
     @Inject(CreditsService) private readonly credits: CreditsPort,
+    @Inject(PricingCatalog) private readonly pricing: PricingCatalog,
   ) {}
+
+  async estimateCost(
+    actor: Auth0User,
+    request: PromptCostEstimateRequest,
+  ): Promise<PromptCostEstimate> {
+    const report = await this.repository.findExtractionReportOwned(
+      actor,
+      request.wizard.extractionId,
+    );
+    if (!report?.investigation) throw notFound();
+
+    let capabilities: ReturnType<ProviderRegistry['get']>;
+    try {
+      capabilities = this.registry.get(request.provider);
+      this.registry.assertModel(request.provider, request.model);
+    } catch (error) {
+      throw mapProviderFailure(error);
+    }
+    if (!capabilities.enabled || capabilities.circuitBreakerOpen) {
+      throw mapProviderFailure(new ProviderFailure('PROVIDER_NOT_CONFIGURED'));
+    }
+
+    const brief = new ReportNarrativeAssembler().assemble(report.investigation);
+    const composed = new PromptComposer().compose({ wizard: request.wizard, brief });
+    const maximumInputTokens = conservativeInputTokenUpperBound(composedPromptLayers(composed));
+    const maximumOutputTokens = Math.min(
+      capabilities.maxOutputTokens,
+      capabilities.contextWindowTokens - maximumInputTokens,
+    );
+    if (maximumOutputTokens <= 0) {
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'The report and instructions exceed the selected model context limit.',
+      });
+    }
+
+    try {
+      const quote = this.pricing.quoteMaximum(
+        request.provider,
+        request.model,
+        maximumInputTokens,
+        maximumOutputTokens,
+      );
+      if (quote.amountMinor <= 0n || quote.amountMinor > MAXIMUM_COST_MINOR) {
+        throw new PricingFailure('PRICING_NOT_CONFIGURED');
+      }
+      return PromptCostEstimateSchema.parse({
+        provider: request.provider,
+        model: request.model,
+        maximumInputTokens,
+        maximumOutputTokens,
+        maximumCostMinor: quote.amountMinor.toString(),
+        pricingVersion: quote.pricingVersion,
+        quotedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (!(error instanceof PricingFailure)) throw error;
+      throw new ServiceUnavailableException({
+        code: 'PROVIDER_UNAVAILABLE',
+        message: 'A verified platform-credit quote is not available for this model.',
+      });
+    }
+  }
+
+  async estimateVersionCost(
+    actor: Auth0User,
+    sourceVersionId: string,
+    request: PromptVersionCostEstimateRequest,
+  ): Promise<PromptVersionCostEstimate> {
+    const version = await this.repository.getVersionOwned(actor, sourceVersionId);
+    if (!version) throw notFound();
+    const project = await this.repository.findProjectOwned(actor, version.projectId);
+    if (!project) throw notFound();
+    const report = await this.repository.findExtractionReportOwned(actor, project.extractionId);
+    if (!report?.investigation) throw notFound();
+
+    let capabilities: ReturnType<ProviderRegistry['get']>;
+    try {
+      capabilities = this.registry.get(request.provider);
+      this.registry.assertModel(request.provider, request.model);
+    } catch (error) {
+      throw mapProviderFailure(error);
+    }
+    if (!capabilities.enabled || capabilities.circuitBreakerOpen) {
+      throw mapProviderFailure(new ProviderFailure('PROVIDER_NOT_CONFIGURED'));
+    }
+    if (request.operation === 'PREVIEW' && !capabilities.previewEligible) {
+      throw new ConflictException({
+        code: 'CONFLICT',
+        message: 'provider does not support preview',
+      });
+    }
+
+    const wizard = {
+      ...project.wizardInput,
+      destination:
+        request.operation === 'ADAPT' ? request.destination : project.wizardInput.destination,
+    };
+    const brief = new ReportNarrativeAssembler().assemble(report.investigation);
+    const composed = new PromptComposer().compose({
+      wizard,
+      brief,
+      sourcePrompt: version as PromptVersion,
+    });
+    const maximumInputTokens = conservativeInputTokenUpperBound(composedPromptLayers(composed));
+    const maximumOutputTokens = Math.min(
+      capabilities.maxOutputTokens,
+      capabilities.contextWindowTokens - maximumInputTokens,
+    );
+    if (maximumOutputTokens <= 0) {
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'The selected prompt exceeds the model context limit.',
+      });
+    }
+    try {
+      const quote = this.pricing.quoteMaximum(
+        request.provider,
+        request.model,
+        maximumInputTokens,
+        maximumOutputTokens,
+      );
+      if (quote.amountMinor <= 0n || quote.amountMinor > MAXIMUM_COST_MINOR) {
+        throw new PricingFailure('PRICING_NOT_CONFIGURED');
+      }
+      return PromptVersionCostEstimateSchema.parse({
+        provider: request.provider,
+        model: request.model,
+        sourceVersionId,
+        operation: request.operation,
+        reportSections: ['technologies', 'structure', 'evidence', 'limitations', 'confidence'],
+        retentionNotice: 'Prompt, versão e prévia permanecem no histórico do projeto.',
+        maximumInputTokens,
+        maximumOutputTokens,
+        maximumCostMinor: quote.amountMinor.toString(),
+        pricingVersion: quote.pricingVersion,
+        quotedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (!(error instanceof PricingFailure)) throw error;
+      throw new ServiceUnavailableException({
+        code: 'PROVIDER_UNAVAILABLE',
+        message: 'A verified platform-credit quote is not available for this model.',
+      });
+    }
+  }
 
   async create(
     actor: Auth0User,
     wizard: PromptWizardInput,
     idempotencyKey: string,
   ): Promise<PromptProject> {
+    if (wizard.destination !== 'universal') {
+      throw new BadRequestException({
+        code: 'VALIDATION',
+        message: 'Initial prompt generation must use the universal destination.',
+      });
+    }
     const outcome = await this.repository.createProject(actor, wizard, idempotencyKey);
     if (!outcome) throw notFound();
     return PromptProjectSchema.parse(outcome.result);
@@ -110,6 +308,44 @@ export class PromptProjectsService {
     const project = await this.repository.findProjectOwned(actor, id);
     if (!project) throw notFound();
     return PromptProjectSchema.parse(project);
+  }
+
+  async listVersions(
+    actor: Auth0User,
+    projectId: string,
+    query: PromptVersionListQuery,
+  ): Promise<PromptVersionListResponse> {
+    const result = await this.repository.listVersionsOwned(actor, projectId, query);
+    if (!result) throw notFound();
+    return PromptVersionListResponseSchema.parse(result);
+  }
+
+  async getVersion(actor: Auth0User, id: string): Promise<PromptVersionDetail> {
+    const version = await this.repository.getVersionOwned(actor, id);
+    if (!version) throw notFound();
+    return PromptVersionDetailSchema.parse(version);
+  }
+
+  async getPreview(actor: Auth0User, jobId: string): Promise<PromptPreview> {
+    const preview = await this.repository.findPreviewByJobOwned(actor, jobId);
+    if (!preview) throw notFound();
+    return PromptPreviewSchema.parse(preview);
+  }
+
+  async editVersion(
+    actor: Auth0User,
+    sourceVersionId: string,
+    input: PromptVersionEditRequest,
+    idempotencyKey: string,
+  ): Promise<PromptVersionDetail> {
+    const outcome = await this.repository.createEditedVersionOwned(
+      actor,
+      sourceVersionId,
+      input,
+      idempotencyKey,
+    );
+    if (!outcome) throw notFound();
+    return PromptVersionDetailSchema.parse(outcome.result);
   }
 
   async generate(
@@ -129,7 +365,7 @@ export class PromptProjectsService {
         credentialMode: request.credentialMode,
         connectionId: request.connectionId,
         sourcePromptVersionId: null,
-        requestMetadata: {},
+        requestMetadata: { destination: 'universal' },
       },
       request,
       idempotencyKey,
@@ -216,7 +452,7 @@ export class PromptProjectsService {
     idempotencyKey: string,
   ): Promise<PromptGenerationJob> {
     await this.validateExecution(actor, request, command.operation);
-    const outcome = await this.repository.createJob(actor, command, idempotencyKey);
+    const outcome = await this.repository.createJob(actor, command, idempotencyKey, request);
     if (!outcome.created && outcome.result.status !== 'QUEUED') {
       if (
         outcome.result.status === 'FAILED' &&
@@ -280,6 +516,18 @@ export class PromptProjectsService {
     request: ExecutionRequest,
     operation: JobCommand['operation'],
   ): Promise<void> {
+    const runtime = loadRuntimeEnv(process.env);
+    if (
+      request.credentialMode === 'PLATFORM_CREDITS' &&
+      request.provider !== 'FAKE' &&
+      runtime.LLM_PROVIDER_MODE === 'live' &&
+      !runtime.LLM_PLATFORM_CREDITS_ENABLED
+    ) {
+      throw new ServiceUnavailableException({
+        code: 'PROVIDER_UNAVAILABLE',
+        message: 'Platform credits are currently unavailable. Choose another credential mode.',
+      });
+    }
     if (request.credentialMode === 'PLATFORM_CREDITS' && !request.acceptPlatformCharge) {
       throw new ConflictException({
         code: 'COST_CONSENT_REQUIRED',
@@ -350,6 +598,12 @@ function mapCreditFailure(error: unknown): HttpException {
       code: 'COST_LIMIT_EXCEEDED',
       message: 'The estimated charge exceeds the confirmed maximum cost.',
     });
+  }
+  if (code === 'CREDIT_DAILY_BUDGET_EXCEEDED') {
+    return new HttpException(
+      { code: 'COST_LIMIT_EXCEEDED', message: 'The daily platform credit budget was reached.' },
+      HttpStatus.PAYMENT_REQUIRED,
+    );
   }
   if (code === 'CREDIT_AMOUNT_INVALID' || code === 'CREDIT_COMMAND_INVALID') {
     return new BadRequestException({

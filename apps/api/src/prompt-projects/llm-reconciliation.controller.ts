@@ -9,7 +9,12 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { IdempotencyKeySchema, PublicIdSchema, type Auth0User } from '@extractionstack/shared';
+import {
+  IdempotencyKeySchema,
+  MAXIMUM_COST_MINOR,
+  PublicIdSchema,
+  type Auth0User,
+} from '@extractionstack/shared';
 import { z } from 'zod';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -24,7 +29,8 @@ export const LlmReconciliationCommandSchema = z
     evidence: z.string().trim().min(8).max(2_000),
     actualCostMinor: z
       .string()
-      .regex(/^[1-9][0-9]{0,18}$/)
+      .regex(/^(0|[1-9][0-9]{0,12})$/)
+      .refine(isCostWithinLimit, 'actual cost exceeds the limit')
       .optional(),
   })
   .strict()
@@ -37,6 +43,11 @@ export const LlmReconciliationCommandSchema = z
       });
   });
 export type LlmReconciliationCommand = z.infer<typeof LlmReconciliationCommandSchema>;
+
+function isCostWithinLimit(value: string): boolean {
+  if (!/^(0|[1-9][0-9]{0,12})$/.test(value)) return false;
+  return BigInt(value) <= MAXIMUM_COST_MINOR;
+}
 
 @Controller('api/admin/prompt-jobs')
 @UseGuards(JwtAuthGuard, RolesGuard)

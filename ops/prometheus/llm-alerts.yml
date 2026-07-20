@@ -1,0 +1,59 @@
+groups:
+  - name: extractionstack-llm
+    rules:
+      - alert: ExtractionStackLlmWorkerDown
+        expr: absent(extractionstack_llm_worker_up) or max(extractionstack_llm_worker_up) < 1
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: LLM worker sem heartbeat
+          runbook: docs/operations/llm-provider-runbook.md#backlog-ou-worker-indisponível
+      - alert: ExtractionStackLlmQueueBacklog
+        expr: sum(extractionstack_llm_queue_depth{state=~"waiting|delayed"}) > 100
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Fila LLM acima do limiar inicial
+          runbook: docs/operations/llm-provider-runbook.md#backlog-ou-worker-indisponível
+      - alert: ExtractionStackLlmFailureRateHigh
+        expr: (sum(increase(extractionstack_llm_worker_jobs_total{status="FAILED"}[5m])) / sum(increase(extractionstack_llm_worker_jobs_total[5m])) > 0.1) and sum(increase(extractionstack_llm_worker_jobs_total[5m])) >= 20
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Taxa de falha LLM acima de 10%
+          runbook: docs/operations/llm-provider-runbook.md#outage-ou-job-travado
+      - alert: ExtractionStackLlmDeadLetterGrowth
+        expr: delta(extractionstack_llm_dead_letter_jobs[10m]) > 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: Novos jobs chegaram à DLQ
+          runbook: docs/operations/llm-provider-runbook.md#dlq-e-replay
+      - alert: ExtractionStackLlmReconciliationBacklog
+        expr: extractionstack_llm_reconciliation_backlog > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: Jobs ambíguos aguardam reconciliação
+          runbook: docs/operations/llm-provider-runbook.md#outage-ou-job-travado
+      - alert: ExtractionStackLlmCreditInvariantViolation
+        expr: extractionstack_credit_invariant_violations > 0
+        for: 0m
+        labels: { severity: critical }
+        annotations:
+          summary: Invariante do ledger violada
+          runbook: docs/operations/llm-provider-runbook.md#billing
+      - alert: ExtractionStackLlmUnexpectedCost
+        expr: increase(extractionstack_llm_worker_cost_minor_total{mode="platform_credits"}[1h]) > 1000
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: Custo horário excedeu o teto inicial
+          runbook: docs/operations/llm-provider-runbook.md#billing
+      - alert: ExtractionStackLlmCredentialFailures
+        expr: sum(rate(extractionstack_llm_worker_jobs_total{error_category="authentication"}[5m])) > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: Falhas persistentes de autenticação ou descriptografia
+          runbook: docs/operations/llm-provider-runbook.md#credencial-e-chave-de-criptografia

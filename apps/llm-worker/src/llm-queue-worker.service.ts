@@ -1,10 +1,11 @@
 import { Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
-import type { Job} from 'bullmq';
+import type { Job } from 'bullmq';
 import { Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { z } from 'zod';
 import type { LlmJobProcessor } from './llm-job.processor';
 import { LLM_QUEUE_NAME } from './llm-worker.types';
+import type { LlmWorkerOperationsService } from './llm-worker-operations.service.js';
 
 const PayloadSchema = z
   .object({ jobId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$/) })
@@ -25,6 +26,7 @@ export class LlmQueueWorkerService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly processor: LlmJobProcessor,
     private readonly options: LlmQueueWorkerOptions,
+    private readonly operations?: Pick<LlmWorkerOperationsService, 'recordQueueState'>,
   ) {}
 
   onModuleInit(): void {
@@ -50,13 +52,23 @@ export class LlmQueueWorkerService implements OnModuleInit, OnModuleDestroy {
         },
       },
     );
-    this.worker.on('completed', (job) => this.logger.log(`llm job completed id=${job.id}`));
-    this.worker.on('failed', (job, error) =>
+    this.worker.on('completed', (job) => {
+      this.logger.log(`llm job completed id=${job.id}`);
+      void this.refreshQueueMetrics().catch(() => undefined);
+    });
+    this.worker.on('failed', (job, error) => {
       this.logger.warn(
         `llm job failed id=${job?.id ?? 'unknown'} errorType=${error.name || 'Error'}`,
-      ),
-    );
+      );
+      void this.refreshQueueMetrics().catch(() => undefined);
+    });
     this.worker.on('error', () => this.logger.error('llm queue worker error'));
+  }
+
+  async refreshQueueMetrics(): Promise<void> {
+    if (!this.connection || !this.operations) return;
+    const failed = await this.connection.zcard(`bull:${LLM_QUEUE_NAME}:failed`);
+    this.operations.recordQueueState({ deadLetters: failed, reconciliationBacklog: 0 });
   }
 
   async onModuleDestroy(): Promise<void> {

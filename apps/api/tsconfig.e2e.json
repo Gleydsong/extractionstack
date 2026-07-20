@@ -1,8 +1,13 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "baseUrl": "../..",
     "noEmit": true,
-    "rootDir": "."
+    "rootDir": "../..",
+    "paths": {
+      "@extractionstack/shared": ["packages/shared/src/index.ts"],
+      "@extractionstack/llm-core": ["packages/llm-core/src/index.ts"]
+    }
   },
   "include": ["src/**/*", "test/**/*", "vitest.e2e.config.ts"]
 }

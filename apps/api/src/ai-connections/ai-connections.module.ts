@@ -193,6 +193,28 @@ export class AiConnectionsModule {}
 
 export function createProviderRegistry(envInput: NodeJS.ProcessEnv): ProviderRegistry {
   const env = loadRuntimeEnv(envInput);
+  if (env.LLM_PROVIDER_MODE === 'fake') {
+    return new ProviderRegistry(
+      [
+        {
+          provider: 'FAKE',
+          credentialModes: ['PLATFORM_CREDITS'],
+          models: ['fake-deterministic-v1'],
+          contextWindowTokens: env.LLM_MAX_INPUT_TOKENS,
+          maxOutputTokens: env.LLM_MAX_OUTPUT_TOKENS,
+          supportsStructuredOutput: false,
+          supportsCancellation: false,
+          supportsCredentialRefresh: false,
+          oauthScopes: [],
+          previewEligible: true,
+          pricingMetadataVersion: env.LLM_PRICING_VERSION,
+          enabled: env.LLM_PROMPT_GENERATION_ENABLED,
+          circuitBreakerOpen: false,
+        },
+      ],
+      { allowTestProvider: true },
+    );
+  }
   const oauth = oauthEnvironment(envInput);
   const geminiCredentialModes = oauth.enabled
     ? (['OAUTH', 'API_KEY', 'PLATFORM_CREDITS'] as const)
@@ -210,7 +232,7 @@ export function createProviderRegistry(envInput: NodeJS.ProcessEnv): ProviderReg
       oauthScopes: [],
       previewEligible: true,
       pricingMetadataVersion: 'configured-2026-07-16',
-      enabled: true,
+      enabled: env.LLM_PROMPT_GENERATION_ENABLED && env.LLM_PROVIDER_OPENAI_ENABLED,
       circuitBreakerOpen: false,
     },
     {
@@ -230,7 +252,7 @@ export function createProviderRegistry(envInput: NodeJS.ProcessEnv): ProviderReg
         : [],
       previewEligible: true,
       pricingMetadataVersion: 'configured-2026-07-16',
-      enabled: true,
+      enabled: env.LLM_PROMPT_GENERATION_ENABLED && env.LLM_PROVIDER_GEMINI_ENABLED,
       circuitBreakerOpen: false,
     },
   ]);

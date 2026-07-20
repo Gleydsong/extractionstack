@@ -71,14 +71,15 @@ describe('extractions HTTP contract', () => {
   });
 
   it('accepts a valid idempotent job request and propagates request id', async () => {
+    const requestId = '019f1517-6bd0-7c02-8f28-532a4fcce123';
     const response = await request(app.getHttpServer())
       .post('/api/extractions')
-      .set('x-request-id', 'e2e-request-1')
+      .set('x-request-id', requestId)
       .set('idempotency-key', 'extract:e2e-request-1')
       .send({ url: 'https://example.com' })
       .expect(202);
 
-    expect(response.headers['x-request-id']).toBe('e2e-request-1');
+    expect(response.headers['x-request-id']).toBe(requestId);
     expect(response.body).toMatchObject({ id: storedJob.id, status: 'QUEUED' });
     expect(queue.enqueue).toHaveBeenCalledWith(storedJob.id);
   });
@@ -91,9 +92,9 @@ describe('extractions HTTP contract', () => {
 
     expect(response.body).toMatchObject({
       code: 'VALIDATION',
-      message: 'request validation failed',
-      fields: [{ path: '', message: "Unrecognized key(s) in object: 'role'" }],
+      message: 'Revise os dados informados e tente novamente.',
     });
+    expect(response.body).not.toHaveProperty('fields');
     expect(repository.createOrGet).toHaveBeenCalledTimes(1);
   });
 });

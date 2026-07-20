@@ -16,23 +16,32 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import {
   IdempotencyKeySchema,
+  PublicProviderCapabilitiesListSchema,
   PublicIdSchema,
   type AiConnection,
   type Auth0User,
+  type PublicProviderCapabilities,
 } from '@extractionstack/shared';
 import { z } from 'zod';
-import { ProviderRegistry, type PublicProviderCapabilities } from '@extractionstack/llm-core';
+import { ProviderRegistry } from '@extractionstack/llm-core';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/roles.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
 import { ZodValidationPipe } from '../common/zod-validation.pipe.js';
+import {
+  LlmRateLimit,
+  LlmRateLimitGuard,
+  LlmRatePolicies,
+} from '../common/llm-rate-limit.guard.js';
 import { AiConnectionsService } from './ai-connections.service.js';
 
-const ApiKeyCommandSchema = z.object({
-  provider: z.enum(['OPENAI', 'GEMINI']),
-  displayLabel: z.string().trim().min(1).max(120),
-  apiKey: z.string().min(8).max(16_384),
-}).strict();
+const ApiKeyCommandSchema = z
+  .object({
+    provider: z.enum(['OPENAI', 'GEMINI']),
+    displayLabel: z.string().trim().min(1).max(120),
+    apiKey: z.string().min(8).max(16_384),
+  })
+  .strict();
 type ApiKeyCommand = z.infer<typeof ApiKeyCommandSchema>;
 
 const OAuthProviderSchema = z.literal('GEMINI');
@@ -49,16 +58,17 @@ export class AiConnectionsController {
   constructor(@Inject(AiConnectionsService) private readonly service: AiConnectionsService) {}
 
   @Get()
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, LlmRateLimitGuard)
   @Roles('user', 'admin')
   list(@Req() request: AuthenticatedRequest): Promise<AiConnection[]> {
     return this.service.list(request.user);
   }
 
   @Post('api-key')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, LlmRateLimitGuard)
   @Roles('user', 'admin')
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @LlmRateLimit(LlmRatePolicies.CONNECTION_API_KEY)
   addApiKey(
     @Req() request: AuthenticatedRequest,
     @Body(new ZodValidationPipe(ApiKeyCommandSchema)) command: ApiKeyCommand,
@@ -69,9 +79,10 @@ export class AiConnectionsController {
   }
 
   @Post(':provider/oauth/start')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, LlmRateLimitGuard)
   @Roles('user', 'admin')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @LlmRateLimit(LlmRatePolicies.OAUTH_START)
   startOAuth(
     @Req() request: AuthenticatedRequest,
     @Param('provider', new ZodValidationPipe(OAuthProviderSchema)) provider: 'GEMINI',
@@ -83,7 +94,9 @@ export class AiConnectionsController {
   }
 
   @Get(':provider/oauth/callback')
+  @UseGuards(LlmRateLimitGuard)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @LlmRateLimit(LlmRatePolicies.OAUTH_CALLBACK)
   finishOAuth(
     @Param('provider', new ZodValidationPipe(OAuthProviderSchema)) provider: 'GEMINI',
     @Query('state', new ZodValidationPipe(OAuthStateSchema)) state: string,
@@ -93,9 +106,10 @@ export class AiConnectionsController {
   }
 
   @Post(':id/validate')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, LlmRateLimitGuard)
   @Roles('user', 'admin')
   @HttpCode(200)
+  @LlmRateLimit(LlmRatePolicies.CONNECTION_VALIDATE)
   validate(
     @Req() request: AuthenticatedRequest,
     @Param('id', new ZodValidationPipe(PublicIdSchema)) id: string,
@@ -106,7 +120,8 @@ export class AiConnectionsController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
+  @LlmRateLimit(LlmRatePolicies.CONNECTION_REVOKE)
+  @UseGuards(JwtAuthGuard, RolesGuard, LlmRateLimitGuard)
   @Roles('user', 'admin')
   remove(
     @Req() request: AuthenticatedRequest,
@@ -119,14 +134,14 @@ export class AiConnectionsController {
 }
 
 @Controller('api/ai/providers')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, LlmRateLimitGuard)
 @Roles('user', 'admin')
 export class AiProvidersController {
   constructor(@Inject(ProviderRegistry) private readonly registry: ProviderRegistry) {}
 
   @Get()
   list(): readonly PublicProviderCapabilities[] {
-    return this.registry.listPublic();
+    return PublicProviderCapabilitiesListSchema.parse(this.registry.listPublic());
   }
 }
 
