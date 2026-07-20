@@ -1,0 +1,1805 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "louvain",
+  "totalFiles": 189,
+  "totalBatches": 17,
+  "exportsByPath": {
+    ".nvmrc": [],
+    "apps/api/src/app.module.ts": [
+      "AppModule"
+    ],
+    "apps/api/src/auth/auth.module.ts": [
+      "AuthModule"
+    ],
+    "apps/api/src/auth/jwt-auth.guard.ts": [
+      "JwtAuthGuard"
+    ],
+    "apps/api/src/auth/jwt.strategy.ts": [
+      "JwtStrategy"
+    ],
+    "apps/api/src/auth/roles.decorator.ts": [
+      "ROLES_KEY",
+      "Roles"
+    ],
+    "apps/api/src/auth/roles.guard.ts": [
+      "RolesGuard"
+    ],
+    "apps/api/src/common/env-guard.spec.ts": [],
+    "apps/api/src/common/env-guard.ts": [
+      "assertSafeRuntimeEnv"
+    ],
+    "apps/api/src/common/extract-errors.spec.ts": [],
+    "apps/api/src/common/extract-errors.ts": [
+      "mapExtractError"
+    ],
+    "apps/api/src/common/http-exception.filter.spec.ts": [],
+    "apps/api/src/common/http-exception.filter.ts": [
+      "HttpExceptionFilter"
+    ],
+    "apps/api/src/common/request-context.spec.ts": [],
+    "apps/api/src/common/request-context.ts": [
+      "requestIdMiddleware",
+      "createRequestLogger",
+      "requestLogContext"
+    ],
+    "apps/api/src/common/runtime-env.spec.ts": [],
+    "apps/api/src/common/runtime-env.ts": [
+      "RuntimeEnvSchema",
+      "loadRuntimeEnv"
+    ],
+    "apps/api/src/common/schemas.spec.ts": [],
+    "apps/api/src/common/security-guardrails.spec.ts": [],
+    "apps/api/src/common/security-guardrails.ts": [
+      "findUnsafeRawQueries",
+      "assertSafeIdentifier"
+    ],
+    "apps/api/src/common/url-safety-v2.spec.ts": [],
+    "apps/api/src/common/url-safety.spec.ts": [],
+    "apps/api/src/common/url-safety.ts": [
+      "UrlNotAllowedError",
+      "isPrivateIp",
+      "assertSafeTargetUrl",
+      "assertSafeRedirectChain"
+    ],
+    "apps/api/src/common/zod-validation.pipe.ts": [
+      "ZodValidationPipe"
+    ],
+    "apps/api/src/extract/crawler/crawler-limits.spec.ts": [],
+    "apps/api/src/extract/crawler/playwright-crawler.ts": [
+      "PlaywrightCrawler",
+      "CrawlerLimitError",
+      "assertCrawlLimits",
+      "CrawlerTimeoutError",
+      "CrawlerTargetError"
+    ],
+    "apps/api/src/extract/detectors/analytics.detector.ts": [
+      "AnalyticsDetector"
+    ],
+    "apps/api/src/extract/detectors/animation.detector.ts": [],
+    "apps/api/src/extract/detectors/apis-consumed.detector.ts": [
+      "ApisConsumedDetector"
+    ],
+    "apps/api/src/extract/detectors/architecture.detector.ts": [],
+    "apps/api/src/extract/detectors/auth-provider.detector.ts": [
+      "AuthProviderDetector"
+    ],
+    "apps/api/src/extract/detectors/backend-framework.detector.ts": [],
+    "apps/api/src/extract/detectors/cdn.detector.ts": [
+      "CdnDetector"
+    ],
+    "apps/api/src/extract/detectors/cloud-provider.detector.ts": [
+      "CloudProviderDetector"
+    ],
+    "apps/api/src/extract/detectors/component-architecture.detector.ts": [],
+    "apps/api/src/extract/detectors/css-customization.detector.ts": [
+      "CssCustomizationDetector"
+    ],
+    "apps/api/src/extract/detectors/css-framework.detector.ts": [
+      "CssFrameworkDetector"
+    ],
+    "apps/api/src/extract/detectors/database-indicators.detector.ts": [
+      "DatabaseIndicatorsDetector"
+    ],
+    "apps/api/src/extract/detectors/design-system.detector.ts": [
+      "DesignSystemDetector"
+    ],
+    "apps/api/src/extract/detectors/design-tokens.detector.ts": [
+      "DesignTokensDetector"
+    ],
+    "apps/api/src/extract/detectors/detector.interface.ts": [
+      "BaseDetector",
+      "ev",
+      "evHigh",
+      "evMed",
+      "evLow"
+    ],
+    "apps/api/src/extract/detectors/detectors-v2.spec.ts": [],
+    "apps/api/src/extract/detectors/detectors.spec.ts": [],
+    "apps/api/src/extract/detectors/docker-kubernetes.detector.ts": [
+      "DockerKubernetesDetector"
+    ],
+    "apps/api/src/extract/detectors/evidence-contract.spec.ts": [],
+    "apps/api/src/extract/detectors/grid-system.detector.ts": [],
+    "apps/api/src/extract/detectors/icons.detector.ts": [],
+    "apps/api/src/extract/detectors/language.detector.ts": [],
+    "apps/api/src/extract/detectors/libraries.detector.ts": [
+      "LibrariesDetector"
+    ],
+    "apps/api/src/extract/detectors/palette.detector.ts": [],
+    "apps/api/src/extract/detectors/performance.detector.ts": [],
+    "apps/api/src/extract/detectors/registry.ts": [
+      "DETECTORS_TOKEN",
+      "RESPONSIVE_GRID_MERGE_KEY",
+      "DETECTOR_LIST",
+      "DETECTORS"
+    ],
+    "apps/api/src/extract/detectors/responsive.detector.ts": [
+      "ResponsiveDetector"
+    ],
+    "apps/api/src/extract/detectors/reverse-proxy.detector.ts": [],
+    "apps/api/src/extract/detectors/routing.detector.ts": [
+      "RoutingDetector"
+    ],
+    "apps/api/src/extract/detectors/scroll-animation.detector.ts": [],
+    "apps/api/src/extract/detectors/seo.detector.ts": [
+      "SeoDetector"
+    ],
+    "apps/api/src/extract/detectors/state-management.detector.ts": [
+      "StateManagementDetector"
+    ],
+    "apps/api/src/extract/detectors/third-party-services.detector.ts": [
+      "ThirdPartyServicesDetector"
+    ],
+    "apps/api/src/extract/detectors/transition.detector.ts": [],
+    "apps/api/src/extract/detectors/typography.detector.ts": [],
+    "apps/api/src/extract/extract.module.ts": [
+      "ExtractModule"
+    ],
+    "apps/api/src/extract/extract.service.ts": [
+      "ExtractService"
+    ],
+    "apps/api/src/extract/investigation-report.builder.spec.ts": [],
+    "apps/api/src/extract/investigation-report.builder.ts": [
+      "buildInvestigationReport"
+    ],
+    "apps/api/src/extractions/extraction-queue.spec.ts": [],
+    "apps/api/src/extractions/extraction-queue.ts": [
+      "EXTRACTION_QUEUE_NAME",
+      "EXTRACTION_BULL_QUEUE",
+      "BullMqExtractionQueue"
+    ],
+    "apps/api/src/extractions/extractions.controller.spec.ts": [],
+    "apps/api/src/extractions/extractions.controller.ts": [
+      "ExtractionsController"
+    ],
+    "apps/api/src/extractions/extractions.module.ts": [
+      "ExtractionsModule"
+    ],
+    "apps/api/src/extractions/extractions.repository.spec.ts": [],
+    "apps/api/src/extractions/extractions.repository.ts": [
+      "ExtractionsRepository"
+    ],
+    "apps/api/src/extractions/extractions.service.spec.ts": [],
+    "apps/api/src/extractions/extractions.service.ts": [
+      "ExtractionsService"
+    ],
+    "apps/api/src/extractions/extractions.types.ts": [
+      "EXTRACTIONS_REPOSITORY",
+      "EXTRACTION_QUEUE"
+    ],
+    "apps/api/src/main.ts": [],
+    "apps/api/src/operations/operations.controller.spec.ts": [],
+    "apps/api/src/operations/operations.controller.ts": [
+      "OperationsController"
+    ],
+    "apps/api/src/operations/operations.module.ts": [
+      "OperationsModule"
+    ],
+    "apps/api/src/operations/operations.service.ts": [
+      "OperationsService"
+    ],
+    "apps/api/src/prisma/prisma.module.ts": [
+      "PrismaService",
+      "PrismaModule"
+    ],
+    "apps/api/test/extractions.e2e-spec.ts": [],
+    "apps/api/vitest.config.ts": [],
+    "apps/api/vitest.e2e.config.ts": [],
+    "apps/web/src/App.tsx": [
+      "App"
+    ],
+    "apps/web/src/features/auth/CallbackPage.tsx": [
+      "CallbackPage"
+    ],
+    "apps/web/src/features/auth/Header.tsx": [
+      "Header"
+    ],
+    "apps/web/src/features/auth/LoginPage.tsx": [
+      "LoginPage"
+    ],
+    "apps/web/src/features/auth/RequireAuth.tsx": [
+      "RequireAuth"
+    ],
+    "apps/web/src/features/auth/WebAuthProvider.tsx": [
+      "useAppAuth",
+      "WebAuthProvider"
+    ],
+    "apps/web/src/features/extract/HomePage.tsx": [
+      "HomePage"
+    ],
+    "apps/web/src/features/extract/InvestigationReportView.spec.tsx": [],
+    "apps/web/src/features/extract/InvestigationReportView.tsx": [
+      "InvestigationReportView"
+    ],
+    "apps/web/src/features/extract/ReportSection.spec.tsx": [],
+    "apps/web/src/features/extract/ReportSection.tsx": [
+      "ReportSection"
+    ],
+    "apps/web/src/features/extract/ReportView.tsx": [
+      "ReportView"
+    ],
+    "apps/web/src/features/extract/UrlForm.tsx": [
+      "UrlForm"
+    ],
+    "apps/web/src/features/extract/useExtract.ts": [
+      "useExtract"
+    ],
+    "apps/web/src/features/extractions/DashboardPage.spec.tsx": [],
+    "apps/web/src/features/extractions/DashboardPage.tsx": [
+      "DashboardPage"
+    ],
+    "apps/web/src/features/extractions/ExtractionPage.tsx": [
+      "ExtractionPage"
+    ],
+    "apps/web/src/features/extractions/HistoryPage.tsx": [
+      "HistoryPage"
+    ],
+    "apps/web/src/features/extractions/JobStatus.tsx": [
+      "JobStatus"
+    ],
+    "apps/web/src/features/extractions/poll-extraction.spec.ts": [],
+    "apps/web/src/features/extractions/poll-extraction.ts": [
+      "pollExtraction"
+    ],
+    "apps/web/src/features/extractions/useExtractionApiClient.ts": [
+      "useExtractionApiClient"
+    ],
+    "apps/web/src/features/extractions/useExtractionJob.ts": [
+      "useExtractionJob"
+    ],
+    "apps/web/src/lib/api-client.spec.ts": [],
+    "apps/web/src/lib/api-client.ts": [
+      "ClientError",
+      "ExtractionApiClient"
+    ],
+    "apps/web/src/main.tsx": [],
+    "apps/web/src/test/setup.ts": [],
+    "apps/web/vite.config.ts": [],
+    "apps/web/vitest.config.ts": [],
+    "apps/worker/src/main.ts": [],
+    "apps/worker/src/queue-worker.service.ts": [
+      "QueueWorkerService"
+    ],
+    "apps/worker/src/runtime-dependencies.spec.ts": [],
+    "apps/worker/src/worker-job.repository.spec.ts": [],
+    "apps/worker/src/worker-job.repository.ts": [
+      "WorkerJobRepository"
+    ],
+    "apps/worker/src/worker.module.ts": [
+      "WorkerModule"
+    ],
+    "apps/worker/src/worker.processor.spec.ts": [],
+    "apps/worker/src/worker.processor.ts": [
+      "WorkerProcessor"
+    ],
+    "apps/worker/src/worker.types.ts": [
+      "WORKER_JOB_STORE",
+      "WORKER_EXTRACTOR"
+    ],
+    "apps/worker/vitest.config.ts": [],
+    "e2e/extraction-flow.spec.ts": [],
+    "ops/nginx.conf": [],
+    "packages/eslint-config/index.js": [],
+    "packages/eslint-config/react.js": [],
+    "packages/shared/src/index.ts": [],
+    "packages/shared/src/schemas/auth.ts": [
+      "UserRoleSchema",
+      "Auth0UserSchema"
+    ],
+    "packages/shared/src/schemas/common.ts": [
+      "ConfidenceSchema",
+      "EvidenceSourceSchema",
+      "EvidenceSchema",
+      "ErrorResponseSchema"
+    ],
+    "packages/shared/src/schemas/extract.ts": [
+      "DimensionSchema",
+      "ExtractRequestSchema",
+      "NetworkEntrySchema",
+      "CookieSchema",
+      "CrawledPageSchema",
+      "DetectorResultSchema",
+      "ExtractionReportSchema"
+    ],
+    "packages/shared/src/schemas/index.ts": [],
+    "packages/shared/src/schemas/investigation.ts": [
+      "InvestigationConfidenceSchema",
+      "InvestigationFindingSchema",
+      "InvestigationSectionSchema",
+      "InvestigationReportSchema"
+    ],
+    "packages/shared/src/schemas/jobs.spec.ts": [],
+    "packages/shared/src/schemas/jobs.ts": [
+      "ExtractionStatusSchema",
+      "IdempotencyKeySchema",
+      "ExtractionIdSchema",
+      "CreateExtractionSchema",
+      "ExtractionJobSchema",
+      "ExtractionListQuerySchema",
+      "ExtractionListResponseSchema"
+    ],
+    "packages/shared/src/types/index.ts": [],
+    "playwright.config.ts": []
+  },
+  "batches": [
+    {
+      "batchIndex": 1,
+      "files": [
+        {
+          "path": ".dockerignore",
+          "language": "unknown",
+          "sizeLines": 9,
+          "fileCategory": "infra"
+        },
+        {
+          "path": "docker-compose.yml",
+          "language": "yaml",
+          "sizeLines": 91,
+          "fileCategory": "infra"
+        },
+        {
+          "path": "Dockerfile",
+          "language": "dockerfile",
+          "sizeLines": 42,
+          "fileCategory": "infra"
+        }
+      ],
+      "batchImportData": {
+        ".dockerignore": [],
+        "docker-compose.yml": [],
+        "Dockerfile": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 2,
+      "files": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "language": "yaml",
+          "sizeLines": 26,
+          "fileCategory": "infra"
+        }
+      ],
+      "batchImportData": {
+        ".github/workflows/ci.yml": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 3,
+      "files": [
+        {
+          "path": ".env.example",
+          "language": "config",
+          "sizeLines": 36,
+          "fileCategory": "config"
+        },
+        {
+          "path": ".prettierrc.json",
+          "language": "json",
+          "sizeLines": 7,
+          "fileCategory": "config"
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "language": "markdown",
+          "sizeLines": 66,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "README.md",
+          "language": "markdown",
+          "sizeLines": 78,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "package.json",
+          "language": "json",
+          "sizeLines": 38,
+          "fileCategory": "config"
+        },
+        {
+          "path": "pnpm-workspace.yaml",
+          "language": "yaml",
+          "sizeLines": 3,
+          "fileCategory": "config"
+        },
+        {
+          "path": "tsconfig.base.json",
+          "language": "json",
+          "sizeLines": 19,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        ".env.example": [],
+        ".prettierrc.json": [],
+        "CONTRIBUTING.md": [],
+        "README.md": [],
+        "package.json": [],
+        "pnpm-workspace.yaml": [],
+        "tsconfig.base.json": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 4,
+      "files": [
+        {
+          "path": "apps/api/nest-cli.json",
+          "language": "json",
+          "sizeLines": 9,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/api/package.json",
+          "language": "json",
+          "sizeLines": 59,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/api/tsconfig.build.json",
+          "language": "json",
+          "sizeLines": 4,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/api/tsconfig.e2e.json",
+          "language": "json",
+          "sizeLines": 8,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/api/tsconfig.json",
+          "language": "json",
+          "sizeLines": 17,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        "apps/api/nest-cli.json": [],
+        "apps/api/package.json": [],
+        "apps/api/tsconfig.build.json": [],
+        "apps/api/tsconfig.e2e.json": [],
+        "apps/api/tsconfig.json": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 5,
+      "files": [
+        {
+          "path": "apps/web/index.html",
+          "language": "html",
+          "sizeLines": 13,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "apps/web/package.json",
+          "language": "json",
+          "sizeLines": 33,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/web/tsconfig.json",
+          "language": "json",
+          "sizeLines": 18,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        "apps/web/index.html": [],
+        "apps/web/package.json": [],
+        "apps/web/tsconfig.json": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 6,
+      "files": [
+        {
+          "path": "apps/worker/package.json",
+          "language": "json",
+          "sizeLines": 33,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/worker/tsconfig.build.json",
+          "language": "json",
+          "sizeLines": 5,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/worker/tsconfig.json",
+          "language": "json",
+          "sizeLines": 21,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        "apps/worker/package.json": [],
+        "apps/worker/tsconfig.build.json": [],
+        "apps/worker/tsconfig.json": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 7,
+      "files": [
+        {
+          "path": "docs/ARCHITECTURE.md",
+          "language": "markdown",
+          "sizeLines": 72,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/README.md",
+          "language": "markdown",
+          "sizeLines": 20,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/plan.md",
+          "language": "markdown",
+          "sizeLines": 15,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "docs/ARCHITECTURE.md": [],
+        "docs/README.md": [],
+        "docs/plan.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 8,
+      "files": [
+        {
+          "path": "docs/decisions/0001-monorepo-pnpm.md",
+          "language": "markdown",
+          "sizeLines": 32,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/decisions/0002-nestjs-modular-monolith.md",
+          "language": "markdown",
+          "sizeLines": 24,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/decisions/0003-detector-plugin-pattern.md",
+          "language": "markdown",
+          "sizeLines": 26,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/decisions/0004-playwright-chromium-only.md",
+          "language": "markdown",
+          "sizeLines": 25,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/decisions/0005-sync-single-page-extraction.md",
+          "language": "markdown",
+          "sizeLines": 30,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/decisions/0006-zod-shared-contract.md",
+          "language": "markdown",
+          "sizeLines": 28,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/decisions/0007-durable-asynchronous-extractions.md",
+          "language": "markdown",
+          "sizeLines": 25,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "docs/decisions/0001-monorepo-pnpm.md": [],
+        "docs/decisions/0002-nestjs-modular-monolith.md": [],
+        "docs/decisions/0003-detector-plugin-pattern.md": [],
+        "docs/decisions/0004-playwright-chromium-only.md": [],
+        "docs/decisions/0005-sync-single-page-extraction.md": [],
+        "docs/decisions/0006-zod-shared-contract.md": [],
+        "docs/decisions/0007-durable-asynchronous-extractions.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 9,
+      "files": [
+        {
+          "path": "docs/superpowers/specs/2026-07-14-extractionstack-design.md",
+          "language": "markdown",
+          "sizeLines": 316,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/superpowers/specs/2026-07-15-production-hardening-design.md",
+          "language": "markdown",
+          "sizeLines": 312,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/superpowers/specs/2026-07-16-llm-prompt-generation-design.md",
+          "language": "markdown",
+          "sizeLines": 618,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "docs/superpowers/specs/2026-07-14-extractionstack-design.md": [],
+        "docs/superpowers/specs/2026-07-15-production-hardening-design.md": [],
+        "docs/superpowers/specs/2026-07-16-llm-prompt-generation-design.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 10,
+      "files": [
+        {
+          "path": "packages/shared/package.json",
+          "language": "json",
+          "sizeLines": 29,
+          "fileCategory": "config"
+        },
+        {
+          "path": "packages/shared/tsconfig.build.json",
+          "language": "json",
+          "sizeLines": 8,
+          "fileCategory": "config"
+        },
+        {
+          "path": "packages/shared/tsconfig.json",
+          "language": "json",
+          "sizeLines": 12,
+          "fileCategory": "config"
+        }
+      ],
+      "batchImportData": {
+        "packages/shared/package.json": [],
+        "packages/shared/tsconfig.build.json": [],
+        "packages/shared/tsconfig.json": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 11,
+      "files": [
+        {
+          "path": ".nvmrc",
+          "language": "unknown",
+          "sizeLines": 1,
+          "fileCategory": "code"
+        },
+        {
+          "path": ".ua/config.json",
+          "language": "json",
+          "sizeLines": 1,
+          "fileCategory": "config"
+        },
+        {
+          "path": ".ua/intermediate/scan-result.json",
+          "language": "json",
+          "sizeLines": 0,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/api/prisma/migrations/20260714161343_init/migration.sql",
+          "language": "sql",
+          "sizeLines": 18,
+          "fileCategory": "data"
+        },
+        {
+          "path": "apps/api/prisma/migrations/20260715000100_jobs_reports/migration.sql",
+          "language": "sql",
+          "sizeLines": 78,
+          "fileCategory": "data"
+        },
+        {
+          "path": "apps/api/prisma/migrations/migration_lock.toml",
+          "language": "toml",
+          "sizeLines": 2,
+          "fileCategory": "config"
+        },
+        {
+          "path": "apps/api/prisma/schema.prisma",
+          "language": "prisma",
+          "sizeLines": 87,
+          "fileCategory": "data"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "language": "typescript",
+          "sizeLines": 26,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/auth/auth.module.ts",
+          "language": "typescript",
+          "sizeLines": 12,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/auth/jwt-auth.guard.ts",
+          "language": "typescript",
+          "sizeLines": 24,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/auth/jwt.strategy.ts",
+          "language": "typescript",
+          "sizeLines": 45,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/auth/roles.decorator.ts",
+          "language": "typescript",
+          "sizeLines": 6,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/auth/roles.guard.ts",
+          "language": "typescript",
+          "sizeLines": 24,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/env-guard.spec.ts",
+          "language": "typescript",
+          "sizeLines": 26,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/env-guard.ts",
+          "language": "typescript",
+          "sizeLines": 5,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/extract-errors.spec.ts",
+          "language": "typescript",
+          "sizeLines": 34,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/extract-errors.ts",
+          "language": "typescript",
+          "sizeLines": 42,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/http-exception.filter.spec.ts",
+          "language": "typescript",
+          "sizeLines": 57,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/http-exception.filter.ts",
+          "language": "typescript",
+          "sizeLines": 67,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/request-context.spec.ts",
+          "language": "typescript",
+          "sizeLines": 36,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/request-context.ts",
+          "language": "typescript",
+          "sizeLines": 45,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/runtime-env.spec.ts",
+          "language": "typescript",
+          "sizeLines": 35,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/runtime-env.ts",
+          "language": "typescript",
+          "sizeLines": 58,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/schemas.spec.ts",
+          "language": "typescript",
+          "sizeLines": 83,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/security-guardrails.spec.ts",
+          "language": "typescript",
+          "sizeLines": 31,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        ".nvmrc": [],
+        ".ua/config.json": [],
+        ".ua/intermediate/scan-result.json": [],
+        "apps/api/prisma/migrations/20260714161343_init/migration.sql": [],
+        "apps/api/prisma/migrations/20260715000100_jobs_reports/migration.sql": [],
+        "apps/api/prisma/migrations/migration_lock.toml": [],
+        "apps/api/prisma/schema.prisma": [],
+        "apps/api/src/app.module.ts": [],
+        "apps/api/src/auth/auth.module.ts": [],
+        "apps/api/src/auth/jwt-auth.guard.ts": [],
+        "apps/api/src/auth/jwt.strategy.ts": [],
+        "apps/api/src/auth/roles.decorator.ts": [],
+        "apps/api/src/auth/roles.guard.ts": [],
+        "apps/api/src/common/env-guard.spec.ts": [],
+        "apps/api/src/common/env-guard.ts": [],
+        "apps/api/src/common/extract-errors.spec.ts": [],
+        "apps/api/src/common/extract-errors.ts": [],
+        "apps/api/src/common/http-exception.filter.spec.ts": [],
+        "apps/api/src/common/http-exception.filter.ts": [],
+        "apps/api/src/common/request-context.spec.ts": [],
+        "apps/api/src/common/request-context.ts": [],
+        "apps/api/src/common/runtime-env.spec.ts": [],
+        "apps/api/src/common/runtime-env.ts": [],
+        "apps/api/src/common/schemas.spec.ts": [],
+        "apps/api/src/common/security-guardrails.spec.ts": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 12,
+      "files": [
+        {
+          "path": "apps/api/src/common/security-guardrails.ts",
+          "language": "typescript",
+          "sizeLines": 18,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/url-safety-v2.spec.ts",
+          "language": "typescript",
+          "sizeLines": 66,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/url-safety.spec.ts",
+          "language": "typescript",
+          "sizeLines": 49,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/url-safety.ts",
+          "language": "typescript",
+          "sizeLines": 129,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/common/zod-validation.pipe.ts",
+          "language": "typescript",
+          "sizeLines": 29,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/crawler/crawler-limits.spec.ts",
+          "language": "typescript",
+          "sizeLines": 23,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/crawler/playwright-crawler.ts",
+          "language": "typescript",
+          "sizeLines": 294,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/analytics.detector.ts",
+          "language": "typescript",
+          "sizeLines": 59,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/animation.detector.ts",
+          "language": "typescript",
+          "sizeLines": 33,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/apis-consumed.detector.ts",
+          "language": "typescript",
+          "sizeLines": 82,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/architecture.detector.ts",
+          "language": "typescript",
+          "sizeLines": 81,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/auth-provider.detector.ts",
+          "language": "typescript",
+          "sizeLines": 104,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/backend-framework.detector.ts",
+          "language": "typescript",
+          "sizeLines": 104,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/cdn.detector.ts",
+          "language": "typescript",
+          "sizeLines": 102,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/cloud-provider.detector.ts",
+          "language": "typescript",
+          "sizeLines": 125,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/component-architecture.detector.ts",
+          "language": "typescript",
+          "sizeLines": 94,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/css-customization.detector.ts",
+          "language": "typescript",
+          "sizeLines": 45,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/css-framework.detector.ts",
+          "language": "typescript",
+          "sizeLines": 37,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/database-indicators.detector.ts",
+          "language": "typescript",
+          "sizeLines": 49,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/design-system.detector.ts",
+          "language": "typescript",
+          "sizeLines": 36,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/design-tokens.detector.ts",
+          "language": "typescript",
+          "sizeLines": 56,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/detector.interface.ts",
+          "language": "typescript",
+          "sizeLines": 42,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/detectors-v2.spec.ts",
+          "language": "typescript",
+          "sizeLines": 187,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/detectors.spec.ts",
+          "language": "typescript",
+          "sizeLines": 82,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/docker-kubernetes.detector.ts",
+          "language": "typescript",
+          "sizeLines": 42,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/api/src/common/security-guardrails.ts": [],
+        "apps/api/src/common/url-safety-v2.spec.ts": [],
+        "apps/api/src/common/url-safety.spec.ts": [],
+        "apps/api/src/common/url-safety.ts": [],
+        "apps/api/src/common/zod-validation.pipe.ts": [],
+        "apps/api/src/extract/crawler/crawler-limits.spec.ts": [],
+        "apps/api/src/extract/crawler/playwright-crawler.ts": [],
+        "apps/api/src/extract/detectors/analytics.detector.ts": [],
+        "apps/api/src/extract/detectors/animation.detector.ts": [],
+        "apps/api/src/extract/detectors/apis-consumed.detector.ts": [],
+        "apps/api/src/extract/detectors/architecture.detector.ts": [],
+        "apps/api/src/extract/detectors/auth-provider.detector.ts": [],
+        "apps/api/src/extract/detectors/backend-framework.detector.ts": [],
+        "apps/api/src/extract/detectors/cdn.detector.ts": [],
+        "apps/api/src/extract/detectors/cloud-provider.detector.ts": [],
+        "apps/api/src/extract/detectors/component-architecture.detector.ts": [],
+        "apps/api/src/extract/detectors/css-customization.detector.ts": [],
+        "apps/api/src/extract/detectors/css-framework.detector.ts": [],
+        "apps/api/src/extract/detectors/database-indicators.detector.ts": [],
+        "apps/api/src/extract/detectors/design-system.detector.ts": [],
+        "apps/api/src/extract/detectors/design-tokens.detector.ts": [],
+        "apps/api/src/extract/detectors/detector.interface.ts": [],
+        "apps/api/src/extract/detectors/detectors-v2.spec.ts": [],
+        "apps/api/src/extract/detectors/detectors.spec.ts": [],
+        "apps/api/src/extract/detectors/docker-kubernetes.detector.ts": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 13,
+      "files": [
+        {
+          "path": "apps/api/src/extract/detectors/evidence-contract.spec.ts",
+          "language": "typescript",
+          "sizeLines": 80,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/grid-system.detector.ts",
+          "language": "typescript",
+          "sizeLines": 27,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/icons.detector.ts",
+          "language": "typescript",
+          "sizeLines": 35,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/language.detector.ts",
+          "language": "typescript",
+          "sizeLines": 70,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/libraries.detector.ts",
+          "language": "typescript",
+          "sizeLines": 70,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/palette.detector.ts",
+          "language": "typescript",
+          "sizeLines": 41,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/performance.detector.ts",
+          "language": "typescript",
+          "sizeLines": 48,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/registry.ts",
+          "language": "typescript",
+          "sizeLines": 77,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/responsive.detector.ts",
+          "language": "typescript",
+          "sizeLines": 23,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/reverse-proxy.detector.ts",
+          "language": "typescript",
+          "sizeLines": 49,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/routing.detector.ts",
+          "language": "typescript",
+          "sizeLines": 60,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/scroll-animation.detector.ts",
+          "language": "typescript",
+          "sizeLines": 32,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/seo.detector.ts",
+          "language": "typescript",
+          "sizeLines": 57,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/state-management.detector.ts",
+          "language": "typescript",
+          "sizeLines": 49,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/third-party-services.detector.ts",
+          "language": "typescript",
+          "sizeLines": 64,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/transition.detector.ts",
+          "language": "typescript",
+          "sizeLines": 26,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/detectors/typography.detector.ts",
+          "language": "typescript",
+          "sizeLines": 48,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/extract.module.ts",
+          "language": "typescript",
+          "sizeLines": 10,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/extract.service.ts",
+          "language": "typescript",
+          "sizeLines": 95,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/investigation-report.builder.spec.ts",
+          "language": "typescript",
+          "sizeLines": 149,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extract/investigation-report.builder.ts",
+          "language": "typescript",
+          "sizeLines": 825,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extraction-queue.spec.ts",
+          "language": "typescript",
+          "sizeLines": 45,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extraction-queue.ts",
+          "language": "typescript",
+          "sizeLines": 45,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extractions.controller.spec.ts",
+          "language": "typescript",
+          "sizeLines": 24,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extractions.controller.ts",
+          "language": "typescript",
+          "sizeLines": 84,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/api/src/extract/detectors/evidence-contract.spec.ts": [],
+        "apps/api/src/extract/detectors/grid-system.detector.ts": [],
+        "apps/api/src/extract/detectors/icons.detector.ts": [],
+        "apps/api/src/extract/detectors/language.detector.ts": [],
+        "apps/api/src/extract/detectors/libraries.detector.ts": [],
+        "apps/api/src/extract/detectors/palette.detector.ts": [],
+        "apps/api/src/extract/detectors/performance.detector.ts": [],
+        "apps/api/src/extract/detectors/registry.ts": [],
+        "apps/api/src/extract/detectors/responsive.detector.ts": [],
+        "apps/api/src/extract/detectors/reverse-proxy.detector.ts": [],
+        "apps/api/src/extract/detectors/routing.detector.ts": [],
+        "apps/api/src/extract/detectors/scroll-animation.detector.ts": [],
+        "apps/api/src/extract/detectors/seo.detector.ts": [],
+        "apps/api/src/extract/detectors/state-management.detector.ts": [],
+        "apps/api/src/extract/detectors/third-party-services.detector.ts": [],
+        "apps/api/src/extract/detectors/transition.detector.ts": [],
+        "apps/api/src/extract/detectors/typography.detector.ts": [],
+        "apps/api/src/extract/extract.module.ts": [],
+        "apps/api/src/extract/extract.service.ts": [],
+        "apps/api/src/extract/investigation-report.builder.spec.ts": [],
+        "apps/api/src/extract/investigation-report.builder.ts": [],
+        "apps/api/src/extractions/extraction-queue.spec.ts": [],
+        "apps/api/src/extractions/extraction-queue.ts": [],
+        "apps/api/src/extractions/extractions.controller.spec.ts": [],
+        "apps/api/src/extractions/extractions.controller.ts": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 14,
+      "files": [
+        {
+          "path": "apps/api/src/extractions/extractions.module.ts",
+          "language": "typescript",
+          "sizeLines": 41,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extractions.repository.spec.ts",
+          "language": "typescript",
+          "sizeLines": 35,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extractions.repository.ts",
+          "language": "typescript",
+          "sizeLines": 170,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extractions.service.spec.ts",
+          "language": "typescript",
+          "sizeLines": 108,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extractions.service.ts",
+          "language": "typescript",
+          "sizeLines": 101,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/extractions/extractions.types.ts",
+          "language": "typescript",
+          "sizeLines": 52,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/main.ts",
+          "language": "typescript",
+          "sizeLines": 40,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/operations/operations.controller.spec.ts",
+          "language": "typescript",
+          "sizeLines": 35,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/operations/operations.controller.ts",
+          "language": "typescript",
+          "sizeLines": 49,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/operations/operations.module.ts",
+          "language": "typescript",
+          "sizeLines": 6,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/operations/operations.service.ts",
+          "language": "typescript",
+          "sizeLines": 67,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/src/prisma/prisma.module.ts",
+          "language": "typescript",
+          "sizeLines": 19,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/test/extractions.e2e-spec.ts",
+          "language": "typescript",
+          "sizeLines": 99,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/vitest.config.ts",
+          "language": "typescript",
+          "sizeLines": 19,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/api/vitest.e2e.config.ts",
+          "language": "typescript",
+          "sizeLines": 16,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/App.tsx",
+          "language": "typescript",
+          "sizeLines": 27,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/auth/CallbackPage.tsx",
+          "language": "typescript",
+          "sizeLines": 14,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/auth/Header.tsx",
+          "language": "typescript",
+          "sizeLines": 23,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/auth/LoginPage.tsx",
+          "language": "typescript",
+          "sizeLines": 21,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/auth/RequireAuth.tsx",
+          "language": "typescript",
+          "sizeLines": 12,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/auth/WebAuthProvider.tsx",
+          "language": "typescript",
+          "sizeLines": 94,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extract/HomePage.tsx",
+          "language": "typescript",
+          "sizeLines": 39,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extract/InvestigationReportView.spec.tsx",
+          "language": "typescript",
+          "sizeLines": 70,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extract/InvestigationReportView.tsx",
+          "language": "typescript",
+          "sizeLines": 210,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extract/ReportSection.spec.tsx",
+          "language": "typescript",
+          "sizeLines": 45,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/api/src/extractions/extractions.module.ts": [],
+        "apps/api/src/extractions/extractions.repository.spec.ts": [],
+        "apps/api/src/extractions/extractions.repository.ts": [],
+        "apps/api/src/extractions/extractions.service.spec.ts": [],
+        "apps/api/src/extractions/extractions.service.ts": [],
+        "apps/api/src/extractions/extractions.types.ts": [],
+        "apps/api/src/main.ts": [],
+        "apps/api/src/operations/operations.controller.spec.ts": [],
+        "apps/api/src/operations/operations.controller.ts": [],
+        "apps/api/src/operations/operations.module.ts": [],
+        "apps/api/src/operations/operations.service.ts": [],
+        "apps/api/src/prisma/prisma.module.ts": [],
+        "apps/api/test/extractions.e2e-spec.ts": [],
+        "apps/api/vitest.config.ts": [],
+        "apps/api/vitest.e2e.config.ts": [],
+        "apps/web/src/App.tsx": [],
+        "apps/web/src/features/auth/CallbackPage.tsx": [],
+        "apps/web/src/features/auth/Header.tsx": [],
+        "apps/web/src/features/auth/LoginPage.tsx": [],
+        "apps/web/src/features/auth/RequireAuth.tsx": [],
+        "apps/web/src/features/auth/WebAuthProvider.tsx": [],
+        "apps/web/src/features/extract/HomePage.tsx": [],
+        "apps/web/src/features/extract/InvestigationReportView.spec.tsx": [],
+        "apps/web/src/features/extract/InvestigationReportView.tsx": [],
+        "apps/web/src/features/extract/ReportSection.spec.tsx": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 15,
+      "files": [
+        {
+          "path": "apps/web/src/features/extract/ReportSection.tsx",
+          "language": "typescript",
+          "sizeLines": 89,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extract/ReportView.tsx",
+          "language": "typescript",
+          "sizeLines": 59,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extract/UrlForm.tsx",
+          "language": "typescript",
+          "sizeLines": 44,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extract/useExtract.ts",
+          "language": "typescript",
+          "sizeLines": 51,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/DashboardPage.spec.tsx",
+          "language": "typescript",
+          "sizeLines": 56,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/DashboardPage.tsx",
+          "language": "typescript",
+          "sizeLines": 56,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/ExtractionPage.tsx",
+          "language": "typescript",
+          "sizeLines": 43,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/HistoryPage.tsx",
+          "language": "typescript",
+          "sizeLines": 43,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/JobStatus.tsx",
+          "language": "typescript",
+          "sizeLines": 20,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/poll-extraction.spec.ts",
+          "language": "typescript",
+          "sizeLines": 50,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/poll-extraction.ts",
+          "language": "typescript",
+          "sizeLines": 43,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/useExtractionApiClient.ts",
+          "language": "typescript",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/features/extractions/useExtractionJob.ts",
+          "language": "typescript",
+          "sizeLines": 62,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/index.css",
+          "language": "css",
+          "sizeLines": 269,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "apps/web/src/lib/api-client.spec.ts",
+          "language": "typescript",
+          "sizeLines": 62,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/lib/api-client.ts",
+          "language": "typescript",
+          "sizeLines": 105,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/main.tsx",
+          "language": "typescript",
+          "sizeLines": 17,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/src/test/setup.ts",
+          "language": "typescript",
+          "sizeLines": 1,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/vite.config.ts",
+          "language": "typescript",
+          "sizeLines": 45,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/web/vitest.config.ts",
+          "language": "typescript",
+          "sizeLines": 17,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/src/main.ts",
+          "language": "typescript",
+          "sizeLines": 12,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/src/queue-worker.service.ts",
+          "language": "typescript",
+          "sizeLines": 54,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/src/runtime-dependencies.spec.ts",
+          "language": "typescript",
+          "sizeLines": 17,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/src/worker-job.repository.spec.ts",
+          "language": "typescript",
+          "sizeLines": 38,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/src/worker-job.repository.ts",
+          "language": "typescript",
+          "sizeLines": 79,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/web/src/features/extract/ReportSection.tsx": [],
+        "apps/web/src/features/extract/ReportView.tsx": [],
+        "apps/web/src/features/extract/UrlForm.tsx": [],
+        "apps/web/src/features/extract/useExtract.ts": [],
+        "apps/web/src/features/extractions/DashboardPage.spec.tsx": [],
+        "apps/web/src/features/extractions/DashboardPage.tsx": [],
+        "apps/web/src/features/extractions/ExtractionPage.tsx": [],
+        "apps/web/src/features/extractions/HistoryPage.tsx": [],
+        "apps/web/src/features/extractions/JobStatus.tsx": [],
+        "apps/web/src/features/extractions/poll-extraction.spec.ts": [],
+        "apps/web/src/features/extractions/poll-extraction.ts": [],
+        "apps/web/src/features/extractions/useExtractionApiClient.ts": [],
+        "apps/web/src/features/extractions/useExtractionJob.ts": [],
+        "apps/web/src/index.css": [],
+        "apps/web/src/lib/api-client.spec.ts": [],
+        "apps/web/src/lib/api-client.ts": [],
+        "apps/web/src/main.tsx": [],
+        "apps/web/src/test/setup.ts": [],
+        "apps/web/vite.config.ts": [],
+        "apps/web/vitest.config.ts": [],
+        "apps/worker/src/main.ts": [],
+        "apps/worker/src/queue-worker.service.ts": [],
+        "apps/worker/src/runtime-dependencies.spec.ts": [],
+        "apps/worker/src/worker-job.repository.spec.ts": [],
+        "apps/worker/src/worker-job.repository.ts": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 16,
+      "files": [
+        {
+          "path": "apps/worker/src/worker.module.ts",
+          "language": "typescript",
+          "sizeLines": 20,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/src/worker.processor.spec.ts",
+          "language": "typescript",
+          "sizeLines": 86,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/src/worker.processor.ts",
+          "language": "typescript",
+          "sizeLines": 34,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/src/worker.types.ts",
+          "language": "typescript",
+          "sizeLines": 22,
+          "fileCategory": "code"
+        },
+        {
+          "path": "apps/worker/vitest.config.ts",
+          "language": "typescript",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "docs/operations/production-readiness.md",
+          "language": "markdown",
+          "sizeLines": 41,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/product/investigation-report.md",
+          "language": "markdown",
+          "sizeLines": 75,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/runbooks/incident-response.md",
+          "language": "markdown",
+          "sizeLines": 32,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/security/security-model.md",
+          "language": "markdown",
+          "sizeLines": 28,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-07-15-production-hardening.md",
+          "language": "markdown",
+          "sizeLines": 560,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "docs/superpowers/plans/2026-07-16-llm-prompt-generation.md",
+          "language": "markdown",
+          "sizeLines": 1390,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "e2e/extraction-flow.spec.ts",
+          "language": "typescript",
+          "sizeLines": 164,
+          "fileCategory": "code"
+        },
+        {
+          "path": "ops/nginx.conf",
+          "language": "conf",
+          "sizeLines": 17,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/eslint-config/index.js",
+          "language": "javascript",
+          "sizeLines": 20,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/eslint-config/package.json",
+          "language": "json",
+          "sizeLines": 12,
+          "fileCategory": "config"
+        },
+        {
+          "path": "packages/eslint-config/react.js",
+          "language": "javascript",
+          "sizeLines": 16,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/index.ts",
+          "language": "typescript",
+          "sizeLines": 2,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/schemas/auth.ts",
+          "language": "typescript",
+          "sizeLines": 12,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/schemas/common.ts",
+          "language": "typescript",
+          "sizeLines": 53,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/schemas/extract.ts",
+          "language": "typescript",
+          "sizeLines": 168,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/schemas/index.ts",
+          "language": "typescript",
+          "sizeLines": 5,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/schemas/investigation.ts",
+          "language": "typescript",
+          "sizeLines": 122,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/schemas/jobs.spec.ts",
+          "language": "typescript",
+          "sizeLines": 60,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/schemas/jobs.ts",
+          "language": "typescript",
+          "sizeLines": 73,
+          "fileCategory": "code"
+        },
+        {
+          "path": "packages/shared/src/types/index.ts",
+          "language": "typescript",
+          "sizeLines": 3,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "apps/worker/src/worker.module.ts": [],
+        "apps/worker/src/worker.processor.spec.ts": [],
+        "apps/worker/src/worker.processor.ts": [],
+        "apps/worker/src/worker.types.ts": [],
+        "apps/worker/vitest.config.ts": [],
+        "docs/operations/production-readiness.md": [],
+        "docs/product/investigation-report.md": [],
+        "docs/runbooks/incident-response.md": [],
+        "docs/security/security-model.md": [],
+        "docs/superpowers/plans/2026-07-15-production-hardening.md": [],
+        "docs/superpowers/plans/2026-07-16-llm-prompt-generation.md": [],
+        "e2e/extraction-flow.spec.ts": [],
+        "ops/nginx.conf": [],
+        "packages/eslint-config/index.js": [],
+        "packages/eslint-config/package.json": [],
+        "packages/eslint-config/react.js": [],
+        "packages/shared/src/index.ts": [],
+        "packages/shared/src/schemas/auth.ts": [],
+        "packages/shared/src/schemas/common.ts": [],
+        "packages/shared/src/schemas/extract.ts": [],
+        "packages/shared/src/schemas/index.ts": [],
+        "packages/shared/src/schemas/investigation.ts": [],
+        "packages/shared/src/schemas/jobs.spec.ts": [],
+        "packages/shared/src/schemas/jobs.ts": [],
+        "packages/shared/src/types/index.ts": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 17,
+      "files": [
+        {
+          "path": "playwright.config.ts",
+          "language": "typescript",
+          "sizeLines": 26,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "playwright.config.ts": []
+      },
+      "neighborMap": {}
+    }
+  ]
+}
