@@ -25,6 +25,11 @@ export default defineConfig({
         target: 'http://localhost:3001',
         changeOrigin: true,
       },
+      '/auth': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        followRedirects: true,
+      },
     },
   },
   optimizeDeps: {
@@ -38,8 +43,10 @@ export default defineConfig({
   },
   envPrefix: 'VITE_',
   define: {
+    // Default to empty string so the Vite dev proxy forwards /api/* transparently
+    // (avoids CORS round-trips). Set VITE_API_BASE_URL for prod builds.
     'import.meta.env.VITE_API_BASE_URL': JSON.stringify(
-      process.env.VITE_API_BASE_URL ?? 'http://localhost:3001',
+      process.env.VITE_API_BASE_URL ?? '',
     ),
   },
 });

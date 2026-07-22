@@ -13,7 +13,6 @@
     "test:e2e": "echo 'web e2e placeholder'"
   },
   "dependencies": {
-    "@auth0/auth0-react": "^2.2.4",
     "@extractionstack/shared": "workspace:*",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

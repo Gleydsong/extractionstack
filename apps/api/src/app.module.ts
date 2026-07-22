@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module.js';
+import { AuthLocalModule } from './auth-local/auth-local.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { ExtractionsModule } from './extractions/extractions.module.js';
 import { OperationsModule } from './operations/operations.module.js';
@@ -18,6 +19,7 @@ import { OperationsModule } from './operations/operations.module.js';
     ]),
     PrismaModule,
     AuthModule,
+    AuthLocalModule,
     ExtractionsModule,
     OperationsModule,
   ],

@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import type { ExtractionApiClient } from '../../lib/api-client';
 import { DashboardPage } from './DashboardPage';
+import { WebAuthProvider } from '../auth/WebAuthProvider';
 
 const queued = {
   id: 'cm1234567890abcdef',
@@ -39,7 +40,9 @@ describe('DashboardPage', () => {
 
     render(
       <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
-        <DashboardPage client={client} />
+        <WebAuthProvider>
+          <DashboardPage client={client} />
+        </WebAuthProvider>
       </MemoryRouter>,
     );
     fireEvent.change(screen.getByLabelText('URL do site'), {
@@ -47,7 +50,9 @@ describe('DashboardPage', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Extrair' }));
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Relatório' })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Relatório' })).toBeInTheDocument(),
+    );
     expect(client.createJob).toHaveBeenCalledWith(
       'https://example.com',
       'extract:cb6d0478-a915-4d09-bde4-b6270d677e6a',

@@ -149,15 +149,108 @@ export function InvestigationReportView({ report }: { report: InvestigationRepor
 
       <section aria-labelledby="technical-evidence">
         <h2 id="technical-evidence">21. Evidências técnicas coletadas</h2>
+        <p className="meta">
+          Inventário bruto das evidências usadas para compor o relatório acima. Use esta seção para
+          auditoria.
+        </p>
         {Object.entries(report.technicalEvidence).map(([name, value]) => (
-          <details key={name}>
-            <summary>{name}</summary>
-            <pre>{JSON.stringify(value, null, 2)}</pre>
+          <details key={name} className="finding">
+            <summary>{humanizeEvidenceTitle(name)}</summary>
+            <TechnicalEvidenceBody name={name} value={value} />
           </details>
         ))}
       </section>
     </div>
   );
+}
+
+const EVIDENCE_TITLES: Record<string, string> = {
+  analyzedUrls: 'URLs analisadas',
+  relevantHeaders: 'Cabeçalhos HTTP relevantes',
+  scripts: 'Scripts carregados',
+  stylesheets: 'Folhas de estilo carregadas',
+  externalDomains: 'Domínios externos contactados',
+  publicEndpoints: 'Endpoints públicos observados',
+  cookies: 'Cookies (apenas nomes)',
+  cssVariables: 'Variáveis CSS coletadas',
+  fonts: 'Fontes detectadas',
+  metadata: 'Metadados extraídos',
+  manifests: 'Web manifests encontrados',
+  serviceWorkers: 'Service workers detectados',
+};
+
+function humanizeEvidenceTitle(name: string): string {
+  return EVIDENCE_TITLES[name] ?? name;
+}
+
+function isEmptyValue(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === 'string' && v.trim().length === 0) return true;
+  if (Array.isArray(v) && v.length === 0) return true;
+  if (typeof v === 'object' && Object.keys(v as object).length === 0) return true;
+  return false;
+}
+
+function formatHeaderValue(v: unknown): string {
+  if (v === null || v === undefined) return 'Não identificado';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (Array.isArray(v)) return v.map((x) => String(x)).join(', ');
+  return JSON.stringify(v);
+}
+
+function TechnicalEvidenceBody({ name, value }: { name: string; value: unknown }): JSX.Element {
+  if (isEmptyValue(value)) {
+    return <p className="data-summary empty">Nenhuma informação coletada para esta categoria.</p>;
+  }
+
+  if (name === 'relevantHeaders' || name === 'metadata') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return (
+      <div className="data-summary">
+        <p className="headline">
+          {entries.length} {entries.length === 1 ? 'item identificado' : 'itens identificados'}.
+        </p>
+        {entries.map(([k, v]) => (
+          <div className="row" key={k}>
+            <div className="k">{k}</div>
+            <div className="v">{formatHeaderValue(v)}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (Array.isArray(value)) {
+    const list = value as unknown[];
+    const preview = list.slice(0, 30);
+    return (
+      <div className="data-summary">
+        <p className="headline">
+          {list.length} {list.length === 1 ? 'item identificado' : 'itens identificados'}.
+        </p>
+        <div className="row">
+          <div className="k">Lista</div>
+          <div className="v">
+            <div>
+              {list.length > 30
+                ? `Mostrando os primeiros 30 de ${list.length} itens.`
+                : 'Todos os itens abaixo.'}
+            </div>
+            <div className="list" style={{ marginTop: 6 }}>
+              {preview.map((item, i) => (
+                <span className="chip" key={`${String(item)}-${i}`}>
+                  {String(item)}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <pre>{String(value)}</pre>;
 }
 
 function Finding({ finding }: { finding: InvestigationFinding }): JSX.Element {

@@ -129,16 +129,17 @@ export class ExtractionsRepository implements ExtractionsRepositoryPort {
   }
 
   private upsertActor(actor: Auth0User) {
+    const email = actor.email ?? `${actor.sub.replace(/[^a-zA-Z0-9._-]/g, '_')}@unknown.local`;
     return this.prisma.user.upsert({
       where: { auth0Sub: actor.sub },
       create: {
         auth0Sub: actor.sub,
-        email: actor.email,
+        email,
         name: actor.name,
         role: actor.roles.includes('admin') ? 'ADMIN' : 'USER',
       },
       update: {
-        email: actor.email,
+        email,
         name: actor.name,
         role: actor.roles.includes('admin') ? 'ADMIN' : 'USER',
       },

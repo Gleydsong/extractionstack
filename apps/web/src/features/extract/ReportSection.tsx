@@ -1,4 +1,5 @@
 import type { DetectorResult, Evidence } from '@extractionstack/shared';
+import { humanizeDetectorData, type HumanSummary } from './formatDetectorData';
 
 interface Props {
   section: DetectorResult;
@@ -21,8 +22,43 @@ function terminalMessage(section: Exclude<DetectorResult, { status: 'ok' }>): st
   return section.status === 'skipped' ? section.reason : section.error;
 }
 
+const TERMINAL_LABELS: Record<'skipped' | 'error', string> = {
+  skipped: 'Este detector não foi aplicado nesta página.',
+  error: 'Este detector encontrou um problema durante a análise.',
+};
+
+function SummaryGrid({ summary }: { summary: HumanSummary }): JSX.Element {
+  if (summary.empty) {
+    return <p className="data-summary empty">{summary.headline}</p>;
+  }
+  return (
+    <div className="data-summary">
+      <p className="headline">{summary.headline}</p>
+      {summary.rows.map((row) => (
+        <div className="row" key={row.key}>
+          <div className="k">{row.key}</div>
+          <div className="v">
+            <div>{row.value}</div>
+            {row.chips && row.chips.length > 0 ? (
+              <div className="list" style={{ marginTop: 6 }}>
+                {row.chips.map((chip, i) => (
+                  <span className="chip" key={`${chip}-${i}`}>
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ReportSection({ section, isOpen, onToggle }: Props): JSX.Element {
   const evidence = section.status === 'ok' ? section.evidence : undefined;
+  const summary =
+    section.status === 'ok' ? humanizeDetectorData(section.dimension, section.data) : null;
   return (
     <div className="section">
       <div
@@ -45,9 +81,9 @@ export function ReportSection({ section, isOpen, onToggle }: Props): JSX.Element
       </div>
       {isOpen ? (
         <>
-          {section.status === 'ok' ? (
+          {section.status === 'ok' && summary ? (
             <>
-              <pre style={{ marginBottom: 8 }}>{JSON.stringify(section.data, null, 2)}</pre>
+              <SummaryGrid summary={summary} />
               {evidence && evidence.length > 0 ? (
                 <div>
                   <div
@@ -72,7 +108,11 @@ export function ReportSection({ section, isOpen, onToggle }: Props): JSX.Element
                           ({e.source})
                         </span>
                         <code style={{ wordBreak: 'break-all' }}>{e.snippet}</code>
-                        {e.note ? <div className="meta" style={{ marginLeft: 0 }}>↳ {e.note}</div> : null}
+                        {e.note ? (
+                          <div className="meta" style={{ marginLeft: 0 }}>
+                            ↳ {e.note}
+                          </div>
+                        ) : null}
                       </li>
                     ))}
                   </ul>
@@ -80,7 +120,19 @@ export function ReportSection({ section, isOpen, onToggle }: Props): JSX.Element
               ) : null}
             </>
           ) : (
-            <pre>{JSON.stringify(terminalMessage(section), null, 2)}</pre>
+            <div className="data-summary">
+              <p className="headline">
+                {section.status === 'ok'
+                  ? ''
+                  : TERMINAL_LABELS[section.status as 'skipped' | 'error']}
+              </p>
+              <div className="row">
+                <div className="k">{section.status === 'skipped' ? 'Motivo' : 'Erro'}</div>
+                <div className="v">
+                  {terminalMessage(section as Exclude<DetectorResult, { status: 'ok' }>)}
+                </div>
+              </div>
+            </div>
           )}
         </>
       ) : null}

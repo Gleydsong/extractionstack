@@ -1,21 +1,34 @@
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useAppAuth } from './WebAuthProvider';
-import { Link } from 'react-router-dom';
 
 export function Header(): JSX.Element {
-  const { user, isAuthenticated, logout, loginWithRedirect } = useAppAuth();
+  const { user, isAuthenticated, logout } = useAppAuth();
+  const navigate = useNavigate();
   return (
     <header className="header">
-      <Link className="brand" to="/">ExtractionStack</Link>
+      <NavLink className="brand" to="/">
+        ExtractionStack
+      </NavLink>
       <nav>
         {isAuthenticated ? (
           <>
-            <Link className="nav-link" to="/">Analisar</Link>
-            <Link className="nav-link" to="/history">Histórico</Link>
-            <span style={{ marginRight: '0.75rem' }}>{user?.name ?? user?.email}</span>
-            <button onClick={() => void logout()}>Sair</button>
+            <NavLink className="nav-link" to="/" end>
+              Analisar
+            </NavLink>
+            <NavLink className="nav-link" to="/history">
+              Histórico
+            </NavLink>
+            <span style={{ marginRight: '0.75rem', color: 'var(--muted)' }}>
+              {user?.name ?? user?.email}
+            </span>
+            <button type="button" onClick={() => void logout()}>
+              Sair
+            </button>
           </>
         ) : (
-          <button onClick={() => loginWithRedirect()}>Entrar</button>
+          <button type="button" onClick={() => navigate('/login')}>
+            Entrar
+          </button>
         )}
       </nav>
     </header>

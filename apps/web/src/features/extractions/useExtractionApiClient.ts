@@ -1,11 +1,12 @@
 import { useMemo } from 'react';
-import { useAppAuth } from '../auth/WebAuthProvider';
+import { authClient } from '../auth/auth-client';
 import { ExtractionApiClient } from '../../lib/api-client';
 
 export function useExtractionApiClient(injected?: ExtractionApiClient): ExtractionApiClient {
-  const { getAccessTokenSilently } = useAppAuth();
   return useMemo(
-    () => injected ?? new ExtractionApiClient(getAccessTokenSilently),
-    [getAccessTokenSilently, injected],
+    () =>
+      injected ??
+      new ExtractionApiClient(async () => authClient.getToken() ?? ''),
+    [injected],
   );
 }

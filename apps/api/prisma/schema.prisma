@@ -8,15 +8,22 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  auth0Sub  String   @unique
-  email     String?  @unique
-  name      String?
-  role      UserRole @default(USER)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  jobs      ExtractionJob[]
-  auditEvents AuditEvent[]
+  id            String    @id @default(cuid())
+  /// Auth0 subject (legacy). Optional now that the app supports local + Google auth.
+  auth0Sub      String?   @unique
+  /// Stable identifier for Google accounts. Unique when present.
+  googleSub     String?   @unique
+  /// Bcrypt hash of the local password. Null for OAuth-only accounts.
+  passwordHash  String?
+  email         String    @unique
+  name          String?
+  picture       String?   @db.VarChar(2048)
+  emailVerified Boolean   @default(false)
+  role          UserRole  @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  jobs          ExtractionJob[]
+  auditEvents   AuditEvent[]
 }
 
 enum UserRole {
