@@ -92,6 +92,9 @@ async function mockApi(page: Page): Promise<void> {
     'access-control-allow-headers': 'authorization,content-type,idempotency-key',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
   };
+  await page.route('**/auth/providers', async (route) => {
+    await route.fulfill({ status: 200, json: { local: true, google: false, dev: false } });
+  });
   await page.route(/\/api\/extractions(?:\/.*)?(?:\?.*)?$/, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -123,6 +126,18 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
+const authUser = { id: 'user_e2e', email: 'e2e@example.com', name: 'E2E', role: 'USER' as const };
+
+async function seedSession(page: Page): Promise<void> {
+  await page.addInitScript(
+    ([tokenKey, userKey, user]: [string, string, unknown]) => {
+      window.localStorage.setItem(tokenKey, 'e2e-token');
+      window.localStorage.setItem(userKey, JSON.stringify(user));
+    },
+    ['extractionstack.token', 'extractionstack.user', authUser] as [string, string, unknown],
+  );
+}
+
 test('creates an extraction and renders the persisted report', async ({ page }) => {
   const pageErrors: string[] = [];
   const requestFailures: string[] = [];
@@ -132,6 +147,7 @@ test('creates an extraction and renders the persisted report', async ({ page }) 
       `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`,
     ),
   );
+  await seedSession(page);
   await mockApi(page);
   await page.goto('/');
   expect(pageErrors).toEqual([]);
@@ -154,6 +170,7 @@ test('shows persisted extraction history', async ({ page }) => {
       `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`,
     ),
   );
+  await seedSession(page);
   await mockApi(page);
   await page.goto('/history');
   expect(pageErrors).toEqual([]);
