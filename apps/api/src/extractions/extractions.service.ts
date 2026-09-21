@@ -17,6 +17,7 @@ import {
 import {
   EXTRACTION_QUEUE,
   EXTRACTIONS_REPOSITORY,
+  AccountEmailConflictError,
   type ExtractionQueuePort,
   type ExtractionsRepositoryPort,
   type StoredExtractionJob,
@@ -37,12 +38,23 @@ export class ExtractionsService {
     idempotencyKey: string,
   ): Promise<ExtractionJob> {
     const normalizedUrl = new URL(command.url).toString();
-    const result = await this.repository.createOrGet({
-      actor,
-      command,
-      normalizedUrl,
-      idempotencyKey,
-    });
+    let result: Awaited<ReturnType<ExtractionsRepositoryPort['createOrGet']>>;
+    try {
+      result = await this.repository.createOrGet({
+        actor,
+        command,
+        normalizedUrl,
+        idempotencyKey,
+      });
+    } catch (error) {
+      if (error instanceof AccountEmailConflictError) {
+        throw new ConflictException({
+          code: 'ACCOUNT_CONFLICT',
+          message: 'account with this email already exists; sign in with the provider you originally used',
+        });
+      }
+      throw error;
+    }
 
     if (result.created) {
       try {

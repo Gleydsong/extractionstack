@@ -2,6 +2,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import type { Auth0User } from '@extractionstack/shared';
 import { ExtractionsService } from './extractions.service.js';
+import { AccountEmailConflictError } from './extractions.types.js';
 import type {
   ExtractionQueuePort,
   ExtractionsRepositoryPort,
@@ -104,5 +105,22 @@ describe('ExtractionsService', () => {
     await expect(service.cancel(actor, 'cm1234567890abcdef')).rejects.toBeInstanceOf(
       ConflictException,
     );
+  });
+
+  it('maps an account email conflict to a controlled 409 without enqueueing', async () => {
+    const { service, repository, queue } = setup();
+    vi.mocked(repository.createOrGet).mockRejectedValue(
+      new AccountEmailConflictError('email already owned'),
+    );
+
+    const error = await service
+      .create(actor, { url: 'https://example.com' }, 'extract-request:0001')
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ConflictException);
+    expect((error as ConflictException).getResponse()).toMatchObject({
+      code: 'ACCOUNT_CONFLICT',
+    });
+    expect(queue.enqueue).not.toHaveBeenCalled();
   });
 });

@@ -34,6 +34,7 @@ export const ErrorResponseSchema = z.object({
     'CRAWLER_TARGET',
     'RATE_LIMITED',
     'CONFLICT',
+    'ACCOUNT_CONFLICT',
     'PAYLOAD_TOO_LARGE',
     'URL_NOT_ALLOWED',
     'QUEUE_UNAVAILABLE',

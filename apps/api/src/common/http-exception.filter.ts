@@ -54,6 +54,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
         return 'FORBIDDEN';
       case 404:
         return 'NOT_FOUND';
+      case 409:
+        return 'CONFLICT';
       case 429:
         return 'RATE_LIMITED';
       case 502:

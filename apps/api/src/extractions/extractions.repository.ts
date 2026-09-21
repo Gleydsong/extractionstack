@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import {
   ExtractionReportSchema,
   type Auth0User,
@@ -10,6 +11,7 @@ import type {
   ExtractionsRepositoryPort,
   StoredExtractionJob,
 } from './extractions.types.js';
+import { AccountEmailConflictError } from './extractions.types.js';
 
 type JobWithReport = ExtractionJob & { report: ExtractionReport | null };
 
@@ -139,27 +141,54 @@ export class ExtractionsRepository implements ExtractionsRepositoryPort {
       where: { OR: [{ id: actor.sub }, { auth0Sub: actor.sub }] },
     });
     if (existing) return existing;
-    // No local account matched, so this is a legacy Auth0 first login: provision it.
+    // No local account matched, so this is a legacy Auth0 first login. Refuse when
+    // another account already owns the email rather than linking identities by email
+    // (account-takeover risk).
+    const email = actorEmail(actor);
+    const emailOwner = await this.prisma.user.findUnique({ where: { email } });
+    if (emailOwner) {
+      throw new AccountEmailConflictError();
+    }
     return this.upsertActor(actor);
   }
 
-  private upsertActor(actor: Auth0User) {
-    const email = actor.email ?? `${actor.sub.replace(/[^a-zA-Z0-9._-]/g, '_')}@unknown.local`;
-    return this.prisma.user.upsert({
-      where: { auth0Sub: actor.sub },
-      create: {
-        auth0Sub: actor.sub,
-        email,
-        name: actor.name,
-        role: actor.roles.includes('admin') ? 'ADMIN' : 'USER',
-      },
-      update: {
-        email,
-        name: actor.name,
-        role: actor.roles.includes('admin') ? 'ADMIN' : 'USER',
-      },
-    });
+  private async upsertActor(actor: Auth0User) {
+    const email = actorEmail(actor);
+    try {
+      return await this.prisma.user.upsert({
+        where: { auth0Sub: actor.sub },
+        create: {
+          auth0Sub: actor.sub,
+          email,
+          name: actor.name,
+          role: actor.roles.includes('admin') ? 'ADMIN' : 'USER',
+        },
+        update: {
+          email,
+          name: actor.name,
+          role: actor.roles.includes('admin') ? 'ADMIN' : 'USER',
+        },
+      });
+    } catch (error) {
+      // The pre-check above can still race with a concurrent signup; map only the
+      // unique email violation to the same controlled conflict.
+      if (isEmailUniqueConstraintError(error)) {
+        throw new AccountEmailConflictError();
+      }
+      throw error;
+    }
   }
+}
+
+function actorEmail(actor: Auth0User): string {
+  // Mirror auth-local normalization: stored local/Google emails are always
+  // trimmed + lowercased, and `User.email` is a case-sensitive unique key.
+  if (actor.email) return actor.email.trim().toLowerCase();
+  // Synthesized fallback must stay injective: two distinct subs that sanitize to
+  // the same prefix must not alias to the same email.
+  const sanitized = actor.sub.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const hash = createHash('sha1').update(actor.sub).digest('hex').slice(0, 8);
+  return `${sanitized}_${hash}@unknown.local`;
 }
 
 function mapJob(job: JobWithReport): StoredExtractionJob {
@@ -183,4 +212,10 @@ function mapJob(job: JobWithReport): StoredExtractionJob {
 
 function isUniqueConstraintError(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+function isEmailUniqueConstraintError(error: unknown): boolean {
+  if (!isUniqueConstraintError(error)) return false;
+  const target = (error as Prisma.PrismaClientKnownRequestError).meta?.target;
+  return Array.isArray(target) && target.includes('email');
 }

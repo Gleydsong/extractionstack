@@ -1,4 +1,4 @@
-import { BadRequestException, type ArgumentsHost } from '@nestjs/common';
+import { BadRequestException, ConflictException, type ArgumentsHost } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { HttpExceptionFilter } from './http-exception.filter.js';
 
@@ -53,5 +53,32 @@ describe('HttpExceptionFilter', () => {
       code: 'URL_NOT_ALLOWED',
       message: 'target rejected',
     });
+  });
+
+  it('emits the account conflict code through the real HTTP response', () => {
+    const { host, status, json } = httpHost();
+
+    new HttpExceptionFilter().catch(
+      new ConflictException({
+        code: 'ACCOUNT_CONFLICT',
+        message: 'account with this email already exists; sign in with the provider you originally used',
+      }),
+      host,
+    );
+
+    expect(status).toHaveBeenCalledWith(409);
+    expect(json).toHaveBeenCalledWith({
+      code: 'ACCOUNT_CONFLICT',
+      message: 'account with this email already exists; sign in with the provider you originally used',
+    });
+  });
+
+  it('falls back to CONFLICT for an unshaped 409 body', () => {
+    const { host, status, json } = httpHost();
+
+    new HttpExceptionFilter().catch(new ConflictException('nope'), host);
+
+    expect(status).toHaveBeenCalledWith(409);
+    expect(json).toHaveBeenCalledWith({ code: 'CONFLICT', message: 'request failed' });
   });
 });

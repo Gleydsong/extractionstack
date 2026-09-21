@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
 import type { PrismaClient } from '@prisma/client';
 import type { Auth0User } from '@extractionstack/shared';
 import { ExtractionsRepository } from './extractions.repository.js';
+import { AccountEmailConflictError } from './extractions.types.js';
 
 type UserRole = 'USER' | 'ADMIN';
 type JobStatus =
@@ -377,6 +378,27 @@ describe('ExtractionsRepository identity resolution', () => {
     expect(items.map((item) => item.id).sort()).toEqual(['job_local_a', 'job_local_b']);
   });
 
+  it('listOwned returns jobs from multiple owners for an admin actor', async () => {
+    const { prisma } = createFakePrisma({
+      users: [
+        { id: 'user_a', email: 'a@b.com', auth0Sub: null, name: 'A', role: 'USER' },
+        { id: 'user_b', email: 'c@d.com', auth0Sub: null, name: 'C', role: 'USER' },
+      ],
+      jobs: [
+        { id: 'job_a', ownerId: 'user_a' },
+        { id: 'job_b', ownerId: 'user_b' },
+      ],
+    });
+    const repository = new ExtractionsRepository(prisma);
+
+    const { items } = await repository.listOwned(
+      { sub: 'admin_1', roles: ['admin'] },
+      { limit: 20, sort: 'createdAt:desc' },
+    );
+
+    expect(items.map((item) => item.id).sort()).toEqual(['job_a', 'job_b']);
+  });
+
   it('requestCancellation cancels the local user job and refuses another user job', async () => {
     const { prisma, state } = createFakePrisma({
       users: [
@@ -401,6 +423,26 @@ describe('ExtractionsRepository identity resolution', () => {
     expect(state.jobs.find((job) => job.id === 'job_other_queued')?.status).toBe('QUEUED');
   });
 
+  it('requestCancellation lets an admin cancel another owner job', async () => {
+    const { prisma, state } = createFakePrisma({
+      users: [
+        { id: 'user_other', email: 'c@d.com', auth0Sub: null, name: 'C', role: 'USER' },
+      ],
+      jobs: [{ id: 'job_other_queued', ownerId: 'user_other', status: 'QUEUED' }],
+    });
+    const repository = new ExtractionsRepository(prisma);
+
+    const cancelled = await repository.requestCancellation(
+      { sub: 'admin_1', roles: ['admin'] },
+      'job_other_queued',
+    );
+
+    expect(cancelled?.status).toBe('CANCEL_REQUESTED');
+    expect(state.jobs.find((job) => job.id === 'job_other_queued')?.status).toBe(
+      'CANCEL_REQUESTED',
+    );
+  });
+
   it('createOrGet does not rewrite an existing local user role from token claims', async () => {
     const { prisma, state } = createFakePrisma({
       users: [{ id: 'user_local_1', email: 'a@b.com', auth0Sub: null, name: 'A', role: 'USER' }],
@@ -416,5 +458,137 @@ describe('ExtractionsRepository identity resolution', () => {
 
     expect(state.users).toHaveLength(1);
     expect(state.users[0]!.role).toBe('USER');
+  });
+
+  it('createOrGet refuses legacy provisioning when another user already owns the email', async () => {
+    const { prisma, state } = createFakePrisma({
+      users: [{ id: 'user_local_1', email: 'a@b.com', auth0Sub: null, name: 'A', role: 'USER' }],
+    });
+    const repository = new ExtractionsRepository(prisma);
+
+    await expect(
+      repository.createOrGet({
+        actor: { sub: 'auth0|other', email: 'a@b.com', roles: ['user'] },
+        command: { url: 'https://example.com' },
+        normalizedUrl: 'https://example.com/',
+        idempotencyKey: 'k1',
+      }),
+    ).rejects.toBeInstanceOf(AccountEmailConflictError);
+
+    expect(state.users).toHaveLength(1);
+    expect(state.jobs).toHaveLength(0);
+  });
+
+  it('createOrGet maps a unique-email violation raised by the upsert race to a conflict', async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const findUnique = vi.fn().mockResolvedValue(null);
+    const upsert = vi
+      .fn()
+      .mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: '5.22.0',
+          meta: { target: ['email'] },
+        }),
+      );
+    const prisma = { user: { findFirst, findUnique, upsert } } as unknown as PrismaClient;
+    const repository = new ExtractionsRepository(prisma);
+
+    await expect(
+      repository.createOrGet({
+        actor: { sub: 'auth0|raced', email: 'a@b.com', roles: ['user'] },
+        command: { url: 'https://example.com' },
+        normalizedUrl: 'https://example.com/',
+        idempotencyKey: 'k1',
+      }),
+    ).rejects.toBeInstanceOf(AccountEmailConflictError);
+  });
+
+  it('createOrGet provisions a legacy Auth0 user without email exactly once', async () => {
+    const { prisma, state } = createFakePrisma();
+    const repository = new ExtractionsRepository(prisma);
+
+    const result = await repository.createOrGet({
+      actor: { sub: 'auth0|fresh', roles: ['user'] },
+      command: { url: 'https://example.com' },
+      normalizedUrl: 'https://example.com/',
+      idempotencyKey: 'k1',
+    });
+
+    expect(result.created).toBe(true);
+    expect(state.users).toHaveLength(1);
+    expect(state.users[0]!.auth0Sub).toBe('auth0|fresh');
+    expect(state.users[0]!.role).toBe('USER');
+    expect(state.jobs).toHaveLength(1);
+    expect(state.jobs[0]!.ownerId).toBe(state.users[0]!.id);
+  });
+
+  it('createOrGet normalizes the token email before the collision check', async () => {
+    const { prisma, state } = createFakePrisma({
+      users: [{ id: 'user_local_1', email: 'a@b.com', auth0Sub: null, name: 'A', role: 'USER' }],
+    });
+    const repository = new ExtractionsRepository(prisma);
+
+    const error = await repository
+      .createOrGet({
+        actor: { sub: 'auth0|other', email: 'A@B.com', roles: ['user'] },
+        command: { url: 'https://example.com' },
+        normalizedUrl: 'https://example.com/',
+        idempotencyKey: 'k1',
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AccountEmailConflictError);
+    expect((error as Error).message).not.toContain('A@B.com');
+    expect((error as Error).message).not.toContain('a@b.com');
+    expect(state.users).toHaveLength(1);
+    expect(state.jobs).toHaveLength(0);
+  });
+
+  it('createOrGet keeps synthesized fallback emails distinct for colliding sanitized subs', async () => {
+    const { prisma, state } = createFakePrisma();
+    const repository = new ExtractionsRepository(prisma);
+
+    await repository.createOrGet({
+      actor: { sub: 'auth0|a_b', roles: ['user'] },
+      command: { url: 'https://example.com' },
+      normalizedUrl: 'https://example.com/',
+      idempotencyKey: 'k1',
+    });
+    await repository.createOrGet({
+      actor: { sub: 'auth0|a|b', roles: ['user'] },
+      command: { url: 'https://example.com' },
+      normalizedUrl: 'https://example.com/',
+      idempotencyKey: 'k2',
+    });
+
+    expect(state.users).toHaveLength(2);
+    expect(state.users[0]!.email).not.toBe(state.users[1]!.email);
+  });
+
+  it('rethrows a non-email unique violation from the upsert race unchanged', async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const findUnique = vi.fn().mockResolvedValue(null);
+    const upsert = vi.fn().mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '5.22.0',
+        meta: { target: ['auth0Sub'] },
+      }),
+    );
+    const prisma = { user: { findFirst, findUnique, upsert } } as unknown as PrismaClient;
+    const repository = new ExtractionsRepository(prisma);
+
+    const error = await repository
+      .createOrGet({
+        actor: { sub: 'auth0|raced', email: 'a@b.com', roles: ['user'] },
+        command: { url: 'https://example.com' },
+        normalizedUrl: 'https://example.com/',
+        idempotencyKey: 'k1',
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).not.toBeInstanceOf(AccountEmailConflictError);
   });
 });

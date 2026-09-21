@@ -9,6 +9,18 @@ import type {
 export const EXTRACTIONS_REPOSITORY = Symbol('EXTRACTIONS_REPOSITORY');
 export const EXTRACTION_QUEUE = Symbol('EXTRACTION_QUEUE');
 
+/**
+ * Raised when legacy Auth0 provisioning would collide with an existing account
+ * that already owns the token's email. We refuse instead of linking by email,
+ * which would let a token claim take over another identity.
+ */
+export class AccountEmailConflictError extends Error {
+  constructor(message = 'account with this email already exists') {
+    super(message);
+    this.name = 'AccountEmailConflictError';
+  }
+}
+
 export interface StoredExtractionJob {
   id: string;
   requestedUrl: string;
