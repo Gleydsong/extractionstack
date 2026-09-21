@@ -3,8 +3,7 @@ import {
   Logger,
   HttpException,
   HttpStatus,
-  UnauthorizedException,
-  ConflictException,
+  Inject,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcrypt';
@@ -22,8 +21,8 @@ export class AuthLocalService {
   private readonly env = loadRuntimeEnv(process.env);
 
   constructor(
-    private readonly prisma: PrismaClient,
-    private readonly jwt: JwtService,
+    @Inject(PrismaClient) private readonly prisma: PrismaClient,
+    @Inject(JwtService) private readonly jwt: JwtService,
   ) {}
 
   async signup(input: SignupInput): Promise<AuthSuccess> {

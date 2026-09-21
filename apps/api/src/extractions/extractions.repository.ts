@@ -20,7 +20,7 @@ export class ExtractionsRepository implements ExtractionsRepositoryPort {
   async createOrGet(
     input: CreateStoredExtraction,
   ): Promise<{ job: StoredExtractionJob; created: boolean }> {
-    const owner = await this.upsertActor(input.actor);
+    const owner = await this.resolveOwner(input.actor);
     const key = {
       ownerId_idempotencyKey: {
         ownerId: owner.id,
@@ -71,7 +71,9 @@ export class ExtractionsRepository implements ExtractionsRepositoryPort {
     const job = await this.prisma.extractionJob.findFirst({
       where: {
         id,
-        ...(actor.roles.includes('admin') ? {} : { owner: { auth0Sub: actor.sub } }),
+        ...(actor.roles.includes('admin')
+          ? {}
+          : { owner: { OR: [{ id: actor.sub }, { auth0Sub: actor.sub }] } }),
       },
       include: { report: true },
     });
@@ -84,7 +86,9 @@ export class ExtractionsRepository implements ExtractionsRepositoryPort {
   ): Promise<{ items: StoredExtractionJob[]; nextCursor: string | null }> {
     const jobs = await this.prisma.extractionJob.findMany({
       where: {
-        ...(actor.roles.includes('admin') ? {} : { owner: { auth0Sub: actor.sub } }),
+        ...(actor.roles.includes('admin')
+          ? {}
+          : { owner: { OR: [{ id: actor.sub }, { auth0Sub: actor.sub }] } }),
         ...(query.status ? { status: query.status } : {}),
       },
       include: { report: true },
@@ -103,7 +107,7 @@ export class ExtractionsRepository implements ExtractionsRepositoryPort {
   async requestCancellation(actor: Auth0User, id: string): Promise<StoredExtractionJob | null> {
     const ownerWhere = actor.roles.includes('admin')
       ? {}
-      : { owner: { auth0Sub: actor.sub } };
+      : { owner: { OR: [{ id: actor.sub }, { auth0Sub: actor.sub }] } };
     const candidate = await this.prisma.extractionJob.findFirst({
       where: { id, ...ownerWhere, status: { in: ['QUEUED', 'RUNNING'] } },
       select: { id: true },
@@ -126,6 +130,17 @@ export class ExtractionsRepository implements ExtractionsRepositoryPort {
         finishedAt: new Date(),
       },
     });
+  }
+
+  private async resolveOwner(actor: Auth0User) {
+    // A user found by `id` already exists (local/Google identity); the token must not
+    // rewrite DB state (email/name/role), which would let token claims drive role drift.
+    const existing = await this.prisma.user.findFirst({
+      where: { OR: [{ id: actor.sub }, { auth0Sub: actor.sub }] },
+    });
+    if (existing) return existing;
+    // No local account matched, so this is a legacy Auth0 first login: provision it.
+    return this.upsertActor(actor);
   }
 
   private upsertActor(actor: Auth0User) {

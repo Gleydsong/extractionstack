@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Inject,
   Logger,
   NotFoundException,
   Post,
@@ -16,7 +17,7 @@ import { AuthLocalService } from './auth-local.service.js';
 import { GoogleStrategy, type GoogleProfile } from './google.strategy.js';
 import { LoginSchema, SignupSchema, type LoginInput, type SignupInput } from './auth.dto.js';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
-import { CurrentUser } from './current-user.decorator.js';
+import { CurrentUser } from '../auth/current-user.decorator.js';
 import type { Auth0User } from '@extractionstack/shared';
 import { loadRuntimeEnv } from '../common/runtime-env.js';
 import type { Request, Response } from 'express';
@@ -29,8 +30,8 @@ export class AuthLocalController {
   private readonly logger = new Logger(AuthLocalController.name);
 
   constructor(
-    private readonly auth: AuthLocalService,
-    private readonly googleStrategy: GoogleStrategy,
+    @Inject(AuthLocalService) private readonly auth: AuthLocalService,
+    @Inject(GoogleStrategy) private readonly googleStrategy: GoogleStrategy,
   ) {}
 
   @Post('signup')
