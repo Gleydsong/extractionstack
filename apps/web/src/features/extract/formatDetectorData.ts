@@ -342,7 +342,6 @@ function renderPalette(data: Record<string, unknown>): HumanSummary {
   const background = asStringArray(data.backgroundColors);
   const text = asStringArray(data.textColors);
   const border = asStringArray(data.borderColors);
-  const sample = asStringArray(data.sample);
   if (background.length === 0 && text.length === 0 && border.length === 0) {
     return {
       headline: 'Nenhuma paleta de cores pôde ser amostrada.',
