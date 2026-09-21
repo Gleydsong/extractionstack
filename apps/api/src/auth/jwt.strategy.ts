@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
+import { ExtractJwt, Strategy, type SecretOrKeyProvider } from 'passport-jwt';
 import { passportJwtSecret } from 'jwks-rsa';
 import type { Auth0User } from '@extractionstack/shared';
 import { loadRuntimeEnv } from '../common/runtime-env.js';
@@ -32,7 +32,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     const auth0Domain = process.env.AUTH0_DOMAIN;
     const auth0Audience = process.env.AUTH0_AUDIENCE;
 
-    const secretOrKeyProvider: any =
+    const secretOrKeyProvider: SecretOrKeyProvider =
       auth0Domain && auth0Audience
         ? passportJwtSecret({
             cache: true,

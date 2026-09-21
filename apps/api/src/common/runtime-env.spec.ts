@@ -6,6 +6,7 @@ const productionBase = {
   AUTH0_DOMAIN: 'tenant.eu.auth0.com',
   AUTH0_AUDIENCE: 'https://api.extractionstack.example',
   CORS_ORIGIN: 'https://app.extractionstack.example',
+  LOCAL_JWT_SECRET: 'prod-local-jwt-secret-7f2c9a1b4e6d8a30',
   DATABASE_URL: 'postgresql://app:secret@postgres:5432/extractionstack',
   REDIS_URL: 'redis://redis:6379',
 };
