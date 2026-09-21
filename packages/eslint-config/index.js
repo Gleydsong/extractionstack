@@ -15,6 +15,5 @@ module.exports = {
     'no-debugger': 'warn',
     'no-empty': 'warn',
     'no-empty-function': 'warn',
-    'no-empty-source': 'warn',
   },
 };
