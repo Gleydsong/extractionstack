@@ -138,6 +138,58 @@ async function seedSession(page: Page): Promise<void> {
   );
 }
 
+const loginUser = {
+  id: 'user_login',
+  email: 'login@example.com',
+  name: 'Login',
+  role: 'USER' as const,
+};
+
+async function mockLoginApi(page: Page): Promise<void> {
+  await page.route('**/auth/providers', async (route) => {
+    await route.fulfill({ status: 200, json: { local: true, google: false, dev: false } });
+  });
+  await page.route('**/auth/login', async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: { token: 'e2e-login-token', user: loginUser },
+    });
+  });
+  await page.route(/\/api\/extractions(?:\/.*)?(?:\?.*)?$/, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/api/extractions') {
+      await route.fulfill({ status: 200, json: { items: [], nextCursor: null } });
+      return;
+    }
+    await route.fulfill({
+      status: 404,
+      json: { code: 'NOT_FOUND', message: 'not found' },
+    });
+  });
+}
+
+test('logs in and lands on the dashboard', async ({ page }) => {
+  const pageErrors: string[] = [];
+  const requestFailures: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('requestfailed', (request) =>
+    requestFailures.push(
+      `${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`,
+    ),
+  );
+  await mockLoginApi(page);
+  await page.goto('/login');
+  await page.getByLabel('E-mail').fill('login@example.com');
+  await page.getByLabel('Senha').fill('password123');
+  await page.getByRole('button', { name: 'Entrar' }).click();
+  await expect(page.getByRole('heading', { name: 'Descubra a stack de um site' })).toBeVisible();
+  const token = await page.evaluate(() => localStorage.getItem('extractionstack.token'));
+  expect(token).toBe('e2e-login-token');
+  expect(pageErrors).toEqual([]);
+  expect(requestFailures).toEqual([]);
+});
+
 test('creates an extraction and renders the persisted report', async ({ page }) => {
   const pageErrors: string[] = [];
   const requestFailures: string[] = [];
